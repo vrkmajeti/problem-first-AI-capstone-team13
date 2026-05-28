@@ -3,7 +3,7 @@ import re
 from typing import TypedDict, List, Dict, Any, Tuple
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
-from backend.config import get_llm
+from backend.config import get_llm, FRESHNESS_LOOKBACK_MINUTES
 from backend.ingestion import get_news_payload
 from backend.routing import get_cross_impact_keywords, route_cross_impact
 from backend.memory import check_ledger_decision
@@ -20,6 +20,8 @@ class WorkflowState(TypedDict):
     ticker_buckets: Dict[str, Dict[str, Any]]
     ticker_syntheses: Dict[str, Dict[str, Any]]
     duplicate_counts: Dict[str, int]
+    ingestion_metadata: Dict[str, Any]
+    llm_failed: bool  # Sentinel: set True if a critical LLM node fails; halts downstream LLM calls
 
 def clean_json_string(text: str) -> str:
     """Cleans markdown JSON code blocks from LLM output if present."""
@@ -46,14 +48,20 @@ def fetch_and_filter_node(state: WorkflowState) -> Dict[str, Any]:
         cross_impact_keywords = get_cross_impact_keywords(watchlist)
         print(f"Expanded search terms from exposure graph: {cross_impact_keywords}")
         
-    articles = get_news_payload(
+    payload = get_news_payload(
         symbol_watchlist=watchlist,
         cross_impact_keywords=cross_impact_keywords,
         scenario_id=scenario_id,
         simulated_now_str=simulated_now
     )
     
-    return {"articles": articles}
+    return {
+        "articles": payload["articles"],
+        "ingestion_metadata": {
+            "total_ingested": payload["total_ingested"],
+            "passed_freshness": payload["passed_freshness"]
+        }
+    }
 
 MOCK_EVENTS = {
     "finnhub_direct_001": {
@@ -222,61 +230,119 @@ def canonical_event_extraction_node(state: WorkflowState) -> Dict[str, Any]:
 
     llm = get_llm()
     
-    # System instructions for canonical extraction
-    system_prompt = """You are an expert financial news analyst. Your task is to extract a canonical structured event representation from a news article. 
+    # System instructions for batch canonical extraction
+    system_prompt = """You are an expert financial news analyst. Your task is to analyze a list of news articles and extract a canonical structured event representation for each relevant article.
 
-You must return a valid JSON object matching this schema exactly:
-{
-  "eventType": "earnings" | "guidance" | "supply_chain" | "regulatory" | "legal" | "macro" | "geopolitical" | "commodity" | "sector" | "private_company_technology" | "natural_disaster" | "other",
-  "eventSummary": "one sentence summarizing the key catalyst event",
-  "hardFacts": ["grounded list of facts, numbers, dates, or details mentioned in the text"],
-  "entities": ["list of companies, products, routes, places, or platforms involved"],
-  "eventTags": ["normalized keywords useful for graph matching (e.g. Taiwan, shipping, semiconductor, model release)"],
-  "regions": ["countries or regions affected (e.g. Taiwan, China, Red Sea)"],
-  "sectors": ["economic sectors (e.g. technology, airlines, shipping)"],
-  "commodities": ["commodities affected (e.g. oil, silicon, microchips)"],
-  "technologyThemes": ["specific technology sub-themes if any (e.g. frontier AI, lithography)"],
-  "possibleDirectionalPressure": "positive" | "negative" | "mixed" | "unclear",
-  "uncertaintyNotes": ["what key uncertainties remain from this article"],
-  "evidence": ["verbatim phrases from the article proving the hard facts"]
-}
+You must return a valid JSON list of objects matching this schema exactly:
+[
+  {
+    "articleId": "string (the exact articleId of the source article)",
+    "eventType": "earnings" | "guidance" | "supply_chain" | "regulatory" | "legal" | "macro" | "geopolitical" | "commodity" | "sector" | "private_company_technology" | "natural_disaster" | "other",
+    "eventSummary": "one sentence summarizing the key catalyst event",
+    "hardFacts": ["grounded list of facts, numbers, dates, or details mentioned in the text"],
+    "entities": ["list of companies, products, routes, places, or platforms involved"],
+    "eventTags": ["normalized keywords useful for graph matching (e.g. Taiwan, shipping, semiconductor, model release)"],
+    "regions": ["countries or regions affected (e.g. Taiwan, China, Red Sea)"],
+    "sectors": ["economic sectors (e.g. technology, airlines, shipping)"],
+    "commodities": ["commodities affected (e.g. oil, silicon, microchips)"],
+    "technologyThemes": ["specific technology sub-themes if any (e.g. frontier AI, lithography)"],
+    "possibleDirectionalPressure": "positive" | "negative" | "mixed" | "unclear",
+    "uncertaintyNotes": ["what key uncertainties remain from this article"],
+    "evidence": ["verbatim phrases from the article proving the hard facts"]
+  }
+]
 
 Strict Rules:
-1. Do NOT invent or extrapolate facts. Extract only what is written in the article text.
-2. The possibleDirectionalPressure must reflect short-term intraday influence (e.g. positive for guidance beats, negative for factory fires).
-3. Do NOT provide buy or sell advice. Do NOT recommend entering or exiting any trade.
-4. Output ONLY valid JSON, do not wrap in markdown or prefix/suffix.
+1. For each article in the input list, extract the corresponding event structure. If an article is completely irrelevant or noise, you may omit it or map it as eventType "other".
+2. Do NOT invent or extrapolate facts. Extract only what is written in the article text.
+3. The possibleDirectionalPressure must reflect short-term intraday influence.
+4. Do NOT provide buy or sell advice.
+5. Output ONLY valid JSON array, do not wrap in markdown or prefix/suffix.
 """
 
-    for art in articles:
-        user_content = f"""SOURCE: {art['sourceName']}
-TIMESTAMP: {art['publishedAt']}
-URL: {art['url']}
-HEADLINE: {art['headline']}
-SUMMARY: {art.get('summary', '')}
-RELATED TICKERS IN SOURCE: {', '.join(art.get('relatedTickers', []))}"""
+    # Reference time for computing article age
+    ref_time = datetime_now()
 
+    def clean_summary(headline: str, summary: str) -> str:
+        """Strips Finnhub-style trailing headline repetition from the summary field."""
+        if not summary:
+            return ""
+        # Finnhub often appends the full headline at the end of the summary text.
+        # Strip it if the summary ends with the headline (case-insensitive).
+        stripped = summary.strip()
+        if stripped.lower().endswith(headline.strip().lower()):
+            stripped = stripped[: -len(headline.strip())].rstrip(" .,;")
+        return stripped
+
+    # Build the input message containing all articles
+    user_content = "Analyze the following news articles and return a JSON list of event objects:\n\n"
+    for i, art in enumerate(articles):
+        headline = art['headline']
+        raw_summary = art.get('summary', '')
+        summary = clean_summary(headline, raw_summary)
         try:
-            response = llm.invoke([
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=user_content)
-            ])
-            cleaned = clean_json_string(response.content)
-            event = json.loads(cleaned)
+            from datetime import datetime, timezone
+            pub_dt = datetime.fromisoformat(art['publishedAt'].replace('Z', '+00:00')).astimezone(timezone.utc)
+            minutes_ago = int((ref_time - pub_dt).total_seconds() / 60)
+        except Exception:
+            minutes_ago = -1
+        age_label = f"{minutes_ago} mins ago" if minutes_ago >= 0 else "unknown age"
+        user_content += f"""--- ARTICLE {i+1} ---
+ARTICLE ID: {art['articleId']}
+SOURCE: {art['sourceName']}
+PUBLISHED: {art['publishedAt']} ({age_label})
+URL: {art['url']}
+HEADLINE: {headline}
+SUMMARY: {summary}
+RELATED TICKERS IN SOURCE: {', '.join(art.get('relatedTickers', []))}
+\n"""
+
+    try:
+        print(f"Calling LLM to extract events from {len(articles)} articles in one batch...")
+        response = llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_content)
+        ])
+        cleaned = clean_json_string(response.content)
+        extracted_events = json.loads(cleaned)
+        
+        # Ensure it is a list
+        if not isinstance(extracted_events, list):
+            # If the LLM returned a single dict, wrap it
+            if isinstance(extracted_events, dict):
+                extracted_events = [extracted_events]
+            else:
+                extracted_events = []
+                
+        # Create map of articles by ID for easy lookup
+        art_map = {art["articleId"]: art for art in articles}
+        
+        for event in extracted_events:
+            art_id = event.get("articleId")
+            if not art_id and len(articles) == 1:
+                # If LLM forgot the articleId but there was only one article, associate it
+                art_id = articles[0]["articleId"]
+                
+            art = art_map.get(art_id)
+            if art:
+                event["eventId"] = f"evt_{art['articleId']}"
+                event["sourceArticleIds"] = [art["articleId"]]
+                event["relatedTickers"] = art.get("relatedTickers", [])
+                event["sourceUrl"] = art.get("url")
+                event["sourceHeadline"] = art.get("headline")
+                canonical_events.append(event)
+                print(f"Extracted Event: {event['eventSummary']} (Type: {event['eventType']})")
+            else:
+                print(f"Warning: Extracted event references unknown articleId: {art_id}")
+                
+    except Exception as e:
+        print(f"Error in batch canonical event extraction: {e}")
+        # Signal downstream nodes that LLM is unavailable — do NOT silently continue with
+        # garbage rule-based events that will pollute the ledger and synthesis.
+        print("LLM unavailable in Node 2. Setting llm_failed=True to halt downstream LLM steps.")
+        return {"canonical_events": [], "llm_failed": True}
             
-            # Map source article ID and related tickers
-            event["eventId"] = f"evt_{art['articleId']}"
-            event["sourceArticleIds"] = [art["articleId"]]
-            event["relatedTickers"] = art.get("relatedTickers", [])
-            event["sourceUrl"] = art.get("url")
-            event["sourceHeadline"] = art.get("headline")
-            
-            canonical_events.append(event)
-            print(f"Extracted Event: {event['eventSummary']} (Type: {event['eventType']})")
-        except Exception as e:
-            print(f"Error extracting canonical event for {art['articleId']}: {e}")
-            
-    return {"canonical_events": canonical_events}
+    return {"canonical_events": canonical_events, "llm_failed": False}
 
 # 3. Routing Node
 def routing_node(state: WorkflowState) -> Dict[str, Any]:
@@ -356,6 +422,29 @@ def ledger_memory_node(state: WorkflowState) -> Dict[str, Any]:
 # 5. Per-Ticker Synthesis Node
 def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
     print("--- [Node 5: Per-Ticker Synthesis] ---")
+    
+    # Halt: if Node 2 signalled LLM failure, skip synthesis entirely
+    if state.get("llm_failed", False):
+        print("Skipping synthesis: upstream LLM failure detected (llm_failed=True).")
+        watchlist = state.get("watchlist", [])
+        empty_syntheses = {}
+        for ticker in watchlist:
+            empty_syntheses[ticker] = {
+                "summaryId": f"sum_halted_{ticker}",
+                "ticker": ticker,
+                "summaryHeadline": "Pipeline halted — LLM unavailable",
+                "situationSummary": "The LLM was rate-limited or unavailable during event extraction. No synthesis was produced. Please retry after the quota resets or switch to a paid API tier.",
+                "mainCatalysts": [],
+                "overallPossibleInfluence": "unclear",
+                "confidence": "low",
+                "uncertainties": ["LLM quota exhausted."],
+                "watchItems": ["Retry after quota reset."],
+                "sourceEventIds": [],
+                "sourceArticleUrls": [],
+                "notFinancialAdvice": True
+            }
+        return {"ticker_buckets": {}, "ticker_syntheses": empty_syntheses}
+
     watchlist = state.get("watchlist", [])
     routed_candidates = state.get("routed_candidates", [])
     duplicate_counts = state.get("duplicate_counts", {})
@@ -407,11 +496,19 @@ def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
         print("No LLM API keys found. Falling back to rules-based mock synthesis.")
         for ticker, bucket in ticker_buckets.items():
             if not bucket["directEvents"] and not bucket["crossImpactEvents"]:
+                metadata = state.get("ingestion_metadata", {})
+                total = metadata.get("total_ingested", 0)
+                passed = metadata.get("passed_freshness", 0)
+                if total > 0 and passed == 0:
+                    situation_summary = f"Ingested {total} articles today, but 0 passed the freshness filter (none were published within the last {FRESHNESS_LOOKBACK_MINUTES} minutes). They were filtered out as older news."
+                else:
+                    situation_summary = f"No new catalysts were detected in the latest freshness window ({FRESHNESS_LOOKBACK_MINUTES} mins)."
+                    
                 ticker_syntheses[ticker] = {
                     "summaryId": f"sum_{ticker}_{int(datetime_now().timestamp())}",
                     "ticker": ticker,
                     "summaryHeadline": "No new catalysts detected",
-                    "situationSummary": "No new catalysts were detected in the latest freshness window.",
+                    "situationSummary": situation_summary,
                     "mainCatalysts": [],
                     "overallPossibleInfluence": "unclear",
                     "confidence": "low",
@@ -514,10 +611,15 @@ def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
     synthesis_system_prompt = """You are a professional financial synthesis analyst supporting a discretionary intraday trader. 
 Your task is to review the direct and indirect catalyst events for a specific watched ticker and write a market-impact synthesis.
 
+Each event in the context includes a "minutesAgo" field indicating how many minutes ago it was published relative to now.
+RECENCY RULE: Weight events published more recently (lower minutesAgo) more heavily in your assessment.
+For intraday trading, events < 30 minutes old are HIGH priority. Events 30-90 minutes old are MEDIUM priority.
+Events > 90 minutes old are BACKGROUND context — still relevant but should not dominate the headline.
+
 You must output a JSON object matching this schema exactly:
 {
   "summaryHeadline": "one concise headline summarizing the net catalyst situation",
-  "situationSummary": "paragraph explanation of what has happened, referencing direct and indirect paths",
+  "situationSummary": "paragraph explanation of what has happened, referencing direct and indirect paths, and explicitly noting which catalysts are breaking vs. background",
   "mainCatalysts": [
     {
       "label": "short catalyst title",
@@ -525,6 +627,7 @@ You must output a JSON object matching this schema exactly:
       "eventType": "event type string",
       "possibleInfluence": "positive" | "negative" | "mixed" | "unclear",
       "confidence": "low" | "medium" | "high" | "tentative",
+      "recency": "breaking" | "recent" | "background",
       "impactPath": ["list", "of", "nodes"]
     }
   ],
@@ -547,14 +650,37 @@ Strict Rules:
 5. Output ONLY valid JSON without markdown wrapping.
 """
 
+    ref_time = datetime_now()
+
+    def annotate_event_recency(event: Dict[str, Any]) -> Dict[str, Any]:
+        """Adds minutesAgo field to an event dict for the synthesis prompt."""
+        try:
+            from datetime import datetime, timezone
+            # sourceHeadline events don't carry publishedAt — skip gracefully
+            pub_raw = event.get("publishedAt", "")
+            if pub_raw:
+                pub_dt = datetime.fromisoformat(pub_raw.replace('Z', '+00:00')).astimezone(timezone.utc)
+                event["minutesAgo"] = int((ref_time - pub_dt).total_seconds() / 60)
+        except Exception:
+            event["minutesAgo"] = -1
+        return event
+
     for ticker, bucket in ticker_buckets.items():
         # Check if anything happened for this ticker
         if not bucket["directEvents"] and not bucket["crossImpactEvents"]:
+            metadata = state.get("ingestion_metadata", {})
+            total = metadata.get("total_ingested", 0)
+            passed = metadata.get("passed_freshness", 0)
+            if total > 0 and passed == 0:
+                situation_summary = f"Ingested {total} articles today, but 0 passed the freshness filter (none were published within the last {FRESHNESS_LOOKBACK_MINUTES} minutes). They were filtered out as older news."
+            else:
+                situation_summary = f"No new catalysts were detected in the latest freshness window ({FRESHNESS_LOOKBACK_MINUTES} mins)."
+
             ticker_syntheses[ticker] = {
                 "summaryId": f"sum_{ticker}_{int(datetime_now().timestamp())}",
                 "ticker": ticker,
                 "summaryHeadline": "No new catalysts detected",
-                "situationSummary": "No new catalysts were detected in the latest freshness window.",
+                "situationSummary": situation_summary,
                 "mainCatalysts": [],
                 "overallPossibleInfluence": "unclear",
                 "confidence": "low",
@@ -565,9 +691,14 @@ Strict Rules:
                 "notFinancialAdvice": True
             }
             continue
+
+        # Annotate each event with its recency in minutes before sending to LLM
+        annotated_bucket = dict(bucket)
+        annotated_bucket["directEvents"] = [annotate_event_recency(dict(e)) for e in bucket["directEvents"]]
+        annotated_bucket["crossImpactEvents"] = [annotate_event_recency(dict(e)) for e in bucket["crossImpactEvents"]]
             
         print(f"Synthesizing catalyst briefing for ticker: {ticker}")
-        context_str = json.dumps(bucket, indent=2)
+        context_str = json.dumps(annotated_bucket, indent=2)
         user_prompt = f"TICKER CONFIG: {ticker}\nCONTEXT BUCKET:\n{context_str}"
         
         try:

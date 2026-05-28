@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional
 from backend.config import init_phoenix, PHOENIX_PORT
 from backend.routing import get_graph, add_graph_node, add_graph_edge
 from backend.memory import get_ledger, clear_ledger
+import backend.memory as _memory_module
 from backend.graph import build_workflow_graph
 
 app = FastAPI(title="Intraday Cross-Impact Catalyst Briefings API")
@@ -94,14 +95,26 @@ def trigger_pipeline(req: RunRequest):
         "routed_candidates": [],
         "ticker_buckets": {},
         "ticker_syntheses": {},
-        "duplicate_counts": {}
+        "duplicate_counts": {},
+        "ingestion_metadata": {},
+        "llm_failed": False
     }
+
+    # Snapshot ledger before run so we can roll back if the pipeline fails
+    ledger_snapshot = list(_memory_module._ledger_store)
     
     try:
         print(f"Executing LangGraph workflow for Iteration {req.iteration} (Scenario: {req.scenario_id})...")
         final_state = workflow_app.invoke(initial_state)
-        
-        # Clean final state for client consumption (e.g. drop embeddings from active ledger entries if sent)
+
+        # If LLM failed, roll back any ledger writes made during this run so
+        # re-running won't treat those articles as already-seen duplicates.
+        if final_state.get("llm_failed", False):
+            print("Pipeline had LLM failure — rolling back ledger to pre-run snapshot.")
+            _memory_module._ledger_store.clear()
+            _memory_module._ledger_store.extend(ledger_snapshot)
+
+        # Clean final state for client consumption
         response_data = {
             "runId": f"run_{req.scenario_id}_{int(datetime_now().timestamp())}",
             "iteration": final_state["iteration"],
@@ -111,7 +124,8 @@ def trigger_pipeline(req: RunRequest):
             "routedCount": len(final_state.get("routed_candidates", [])),
             "duplicateCounts": final_state.get("duplicate_counts", {}),
             "tickerSyntheses": final_state.get("ticker_syntheses", {}),
-            # Send other structures for debug view
+            "llmFailed": final_state.get("llm_failed", False),
+            # Debug structures
             "rawArticles": final_state.get("articles", []),
             "canonicalEvents": final_state.get("canonical_events", []),
             "routedCandidates": final_state.get("routed_candidates", []),
@@ -119,7 +133,10 @@ def trigger_pipeline(req: RunRequest):
         }
         return response_data
     except Exception as e:
-        print(f"Error running pipeline: {e}")
+        # Also roll back ledger on unexpected crash
+        print(f"Error running pipeline: {e} — rolling back ledger.")
+        _memory_module._ledger_store.clear()
+        _memory_module._ledger_store.extend(ledger_snapshot)
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Pipeline execution failed: {str(e)}")
@@ -128,7 +145,7 @@ def trigger_pipeline(req: RunRequest):
 def get_phoenix_status():
     return {
         "running": True,
-        "dashboardUrl": f"http://localhost:{PHOENIX_PORT}",
+        "dashboardUrl": f"http://127.0.0.1:{PHOENIX_PORT}",
         "projectName": "cross-impact-catalysts"
     }
 

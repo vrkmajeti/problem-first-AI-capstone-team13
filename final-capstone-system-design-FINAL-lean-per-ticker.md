@@ -25,7 +25,7 @@ The architecture deliberately stays workflow-based. The financial domain is high
 ```text
 Direct company news + exposure-aware broad news
 → source and quality filters
-→ canonical event extraction
+→ batch canonical event extraction (single LLM call)
 → direct ticker routing or exposure-graph routing
 → catalyst ledger
 → ticker-specific context buckets
@@ -83,21 +83,27 @@ The system is not designed to beat professional terminals by milliseconds. The p
 
 Freshness is a core product requirement, not an implementation detail. The system is built for intraday use, so it should process only very recent news by default.
 
-In the capstone demo, the user clicks a UI action such as **Fetch latest catalysts**. That manual action triggers live API requests and processes only articles from the latest freshness window:
+In the capstone demo, the user clicks a UI action such as **Fetch latest catalysts**. That manual action triggers live API requests and processes only articles from the latest freshness window.
+
+The freshness window is controlled by the `FRESHNESS_LOOKBACK_MINUTES` environment variable:
 
 ```text
-primary target: last 5 minutes of news
-maximum lookback buffer: last 10 minutes
-reason for buffer: API indexing delays, publisher timestamp lag, clock differences
-older articles: ignored in the live capstone flow unless manually used for prompt/eval work
+production target: 5-10 minutes
+capstone live demo: 120 minutes (configurable)
+reason for wider demo window: live API coverage is uneven; a wider window ensures
+  enough articles reach the LLM steps for a meaningful capstone demonstration.
+reason for production narrowness: minimise duplicate re-processing and keep
+  the briefing focused on genuinely breaking news.
 ```
+
+The lookback window affects how many articles enter the batch extraction step. A wider window means more articles per LLM call, which consumes more quota. The workflow is designed to degrade gracefully when the LLM is rate-limited rather than pollute the ledger with garbage (see §9.3 workflow fault behaviour).
 
 In production, the same logic would be scheduled automatically every 5 minutes. The difference is orchestration only:
 
 ```text
-Capstone demo: manual UI-triggered pull
-Production: automatic 5-minute polling loop
-Core pipeline: same in both modes
+Capstone demo: manual UI-triggered pull, wider freshness window
+Production: automatic 5-minute polling loop, narrow freshness window
+Core pipeline: identical in both modes
 ```
 
 This freshness constraint is also the reason the system needs memory. Because every pull overlaps with the previous few minutes, the system will repeatedly see the same article, syndicated copies, and follow-up articles about the same catalyst. The catalyst ledger prevents repeated briefings and decides whether an incoming article is:
@@ -121,7 +127,7 @@ However, the LLM is not trusted to freely invent impact chains. The design separ
 | News fetching | API clients + manual UI trigger / scheduler | Predictable and auditable |
 | Source and timestamp filters | Code | Objective rules |
 | Exposure query generation | Code from graph | Keeps broad-news search bounded |
-| Canonical event extraction | LLM | Requires language understanding |
+| Batch canonical event extraction | LLM | Batch-processes all articles in one call to minimize token overhead |
 | Direct ticker routing | Code | Based on source tags and watchlist |
 | Indirect impact routing | Exposure graph + code | Avoids vague LLM over-connection |
 | Duplicate/update decision | Catalyst ledger + code | Needs determinism and evalability |
@@ -866,8 +872,7 @@ The first implementation should use a strong mid-tier model. A high-reasoning mo
 
 | Role | Model type | Runtime or offline | Reason |
 |---|---|---|---|
-| Canonical event extraction | Strong mid-tier LLM | Runtime | Convert article/event text into structured fields |
-| Event-level extraction/classification | Strong mid-tier LLM | Runtime | Convert article/event text into structured event fields and affected ticker candidates |
+| Batch canonical event extraction | Strong mid-tier LLM | Runtime | Convert a batch of multiple articles/event texts into a structured list of canonical events in a single LLM call |
 | Per-ticker synthesis | Strong mid-tier LLM | Runtime | Generate one final market-impact synthesis per watched ticker from ticker-specific context only |
 | Embeddings | Embedding model | Runtime | Cluster similar event summaries for catalyst memory |
 | LLM judge | Strong LLM | Offline eval | Evaluate faithfulness and impact-path explanation quality |
@@ -955,9 +960,8 @@ Iteration 1 builds the basic direct-news spine:
 watchlist tickers
 → Finnhub company-news ingestion
 → source/freshness filters
-→ article-to-ticker split
-→ canonical event extraction
-→ materiality gate
+→ batch canonical event extraction (single LLM call)
+→ direct ticker routing
 → ticker context bucket
 → per-ticker market-impact synthesis
 ```
@@ -977,11 +981,9 @@ Finnhub company-news pulls
         ↓
 Freshness filter + exact dedup
         ↓
-Ticker candidate routing
+Batch canonical event extraction (single LLM call)
         ↓
-Canonical event extraction
-        ↓
-Materiality gate
+Direct ticker routing (deterministic Code)
         ↓
 Ticker context buckets
         ↓
@@ -1138,14 +1140,15 @@ new catalyst → new briefing
 ### Architecture diagram
 
 ```text
-Normalized article
+Normalized articles
         ↓
-Canonical event extraction
+Batch canonical event extraction (single LLM call)
         ↓
-Catalyst fingerprint
-(ticker + event_type + embedded event_summary)
+Direct ticker routing (deterministic Code)
         ↓
-Recent-catalyst ledger lookup
+Catalyst fingerprint mapping (per candidate)
+        ↓
+Recent-catalyst ledger lookup (deterministic Code check)
         ↓
 Decision:
 duplicate / update / new
@@ -1211,6 +1214,21 @@ exact duplicate decision, semantic duplicate score, new-hard-fact decision, upda
 ```
 
 The system does not need permanent `catalyst_members`, `canonical_events`, or full update logs as separate product tables unless the product later requires a detailed audit history.
+
+### Ledger rollback on failed runs
+
+The catalyst ledger is an in-memory store keyed per server process. If a pipeline run fails before the LLM synthesis step (for example, due to API rate-limiting), any ledger writes that Node 4 may have made during that run could incorrectly mark fresh articles as already-seen when the user retries.
+
+The implemented defence:
+
+```text
+1. Before each /api/run invocation, snapshot the current ledger state.
+2. After the run completes, check whether the workflow set llm_failed=True.
+3. If yes, restore the snapshot, reverting all ledger writes from the failed run.
+4. On unexpected pipeline crash, also restore the snapshot.
+```
+
+This means a failed run leaves zero trace in the ledger. The next retry sees all articles as genuinely fresh.
 
 ### Catalyst ledger entry
 
@@ -1288,21 +1306,19 @@ Exposure graph
    ↓
 Exposure-aware query planner
    ↓
-Currents search/latest-news
+Currents search/latest-news + Finnhub news
    ↓
 Freshness filter + exact dedup
    ↓
-Canonical event extraction
+Batch canonical event extraction (single LLM call)
    ↓
-Event tags mapped to graph nodes
+Event tags mapped to graph nodes & direct tickers
    ↓
-Exposure graph traversal
+Exposure graph traversal & direct routing (deterministic Code)
    ↓
 Impacted watched ticker candidates
    ↓
-Impact-path confidence gate
-   ↓
-Catalyst ledger per ticker
+Catalyst ledger per ticker (deterministic Code check)
    ↓
 Ticker context buckets
    ↓
@@ -1556,8 +1572,8 @@ presents speculation as certainty.
                     └──────────┬──────────┘
                                │
                     ┌──────────▼──────────┐
-                    │ Canonical event      │
-                    │ extraction           │
+                    │ Batch canonical     │
+                    │ event extraction    │
                     └──────────┬──────────┘
                                │
           ┌────────────────────┴────────────────────┐
@@ -1649,7 +1665,40 @@ This keeps the product database lean while preserving enough visibility to debug
 
 Golden dataset examples are separate from runtime storage. They are stored as offline eval cases used for prompt design, schema tuning, judge calibration, and regression tests. They are not mixed into the live capstone input or product database.
 
-## 9.3 What is not included
+## 9.3 Workflow fault behaviour
+
+The pipeline uses a `llm_failed` sentinel field in the LangGraph state to implement fail-fast semantics.
+
+```text
+Node 2 (canonical event extraction):
+  → If the LLM call raises an exception (rate-limit, timeout, etc.):
+    → Set llm_failed=True
+    → Return canonical_events=[]
+    → Do NOT fall back to rule-based junk events (this would pollute the ledger)
+
+Node 3 (routing) and Node 4 (ledger memory):
+  → Receive empty canonical_events, produce no candidates.
+  → Ledger is not written to.
+
+Node 5 (per-ticker synthesis):
+  → Check llm_failed at entry
+  → If True: skip all LLM calls, return "Pipeline halted — LLM unavailable" per ticker
+
+Node 6 (compliance gate):
+  → Runs regardless; cleans whatever text was produced.
+
+In main.py:
+  → After workflow.invoke() returns, if llm_failed=True:
+    → Roll back ledger to pre-run snapshot.
+  → On any unexpected exception:
+    → Also roll back ledger.
+```
+
+This ensures a failed run is completely idempotent from the ledger's perspective: the next re-run sees all articles as fresh.
+
+The API response includes `"llmFailed": true/false` so the frontend can show a clear retry message rather than displaying empty or misleading synthesis cards.
+
+## 9.4 What is not included
 
 The capstone does not build:
 
@@ -1751,6 +1800,23 @@ separate source content from model instructions,
 log source and timestamp for every briefing.
 ```
 
+### Finnhub summary field deduplication
+
+Finnhub's `summary` field frequently appends a verbatim copy of the article headline at the end of the summary text. Sending this duplication to the LLM inflates prompt tokens, degrades extraction quality, and creates misleading Arize traces where the summary appears to be the same across many articles.
+
+The implemented fix strips the trailing headline repetition from the `summary` field before constructing the batch extraction prompt:
+
+```text
+clean_summary(headline, summary):
+  if summary ends with headline (case-insensitive):
+    strip headline from end of summary
+    return cleaned summary
+  else:
+    return summary as-is
+```
+
+This runs as a pure text transformation in Node 2 before any LLM call. No API call or extra latency is added.
+
 ## 11.2 Output guardrails
 
 The system must not provide direct trading instructions.
@@ -1837,8 +1903,8 @@ Optimize in this order:
 
 ```text
 1. Better query planner and source filters.
-2. Fewer LLM calls through dedup and routing.
-3. Smaller model for extraction if evals pass.
+2. Group articles and run Batch Extraction in a single LLM call.
+3. Fewer synthesis calls through ledger deduplication and routing.
 4. Embedding threshold tuning.
 5. Only then consider model changes.
 ```
@@ -2421,6 +2487,7 @@ export type TickerSummary = {
     eventType: CanonicalEvent["eventType"];
     possibleInfluence: "positive" | "negative" | "mixed" | "unclear";
     confidence: "low" | "medium" | "high" | "tentative";
+    recency: "breaking" | "recent" | "background";  // derived from minutesAgo at synthesis time
     impactPath?: string[];
   }>;
   overallPossibleInfluence: "positive" | "negative" | "mixed" | "unclear";
@@ -2430,6 +2497,7 @@ export type TickerSummary = {
   sourceEventIds: string[];
   sourceArticleUrlHashes: string[];
   notFinancialAdvice: true;
+  llmFailed?: boolean;  // true if the run was halted due to LLM unavailability
 };
 ```
 
@@ -2529,7 +2597,7 @@ Build in this order:
 
 ## 17.8 Minimum credible demo flow
 
-The demo should start with a manual UI pull: **Fetch latest catalysts**. The system then processes only the last 5 minutes of API results, with a 10-minute safety buffer.
+The demo should start with a manual UI pull: **Fetch latest catalysts**. The system processes API results from the configured freshness window (120 minutes in the capstone live mode).
 
 The demo should show three examples:
 
@@ -2540,6 +2608,48 @@ The demo should show three examples:
 ```
 
 That proves the full project thesis.
+
+## 17.9 Implementation notes: runtime behaviour decisions
+
+The following decisions were made during implementation and differ from or extend the original design.
+
+### Freshness window in live mode
+
+`FRESHNESS_LOOKBACK_MINUTES` is set to `120` in the capstone live environment (configurable via `.env`). The original design targeted 5-10 minutes. The wider window is used for the capstone demo because live API coverage over very short windows is sparse and inconsistent. In production, this should be reduced to 5-10 minutes once automatic polling is active.
+
+### Batch extraction prompt includes article age
+
+Each article in the Node 2 batch prompt now includes a `PUBLISHED: <timestamp> (X mins ago)` label. This gives the LLM explicit recency context during extraction, which improves prioritisation of breaking events.
+
+### Per-ticker synthesis is recency-weighted
+
+Before each ticker's context bucket is sent to the synthesis LLM, each event is annotated with a `minutesAgo` field. The synthesis system prompt instructs the LLM to weight events by recency:
+
+```text
+< 30 minutes old  → HIGH priority (breaking)
+30–90 minutes old → MEDIUM priority (recent)
+> 90 minutes old  → BACKGROUND context
+```
+
+The `mainCatalysts` schema includes a `recency` field (`breaking | recent | background`) in the LLM output.
+
+### Workflow halts on LLM failure; ledger rolls back
+
+If Node 2 (canonical event extraction) fails due to LLM unavailability (rate-limit, timeout):
+
+```text
+→ llm_failed=True is set in the LangGraph state
+→ canonical_events=[] is returned (no rule-based fallback)
+→ Node 5 (synthesis) skips all LLM calls
+→ The API response includes "llmFailed": true
+→ The ledger is rolled back to its pre-run state
+```
+
+This replaces the previous behaviour of silently continuing with rule-based garbage events, which would pollute the ledger and cause real articles to appear as duplicates on the next re-run.
+
+### Finnhub summary cleaning
+
+Finnhub appends the article headline verbatim at the end of the `summary` field. This is stripped before the batch extraction prompt is constructed, preventing token waste and ensuring the Arize trace shows distinct per-article summaries.
 
 ---
 
