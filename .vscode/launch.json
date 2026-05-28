@@ -35,12 +35,30 @@
       "runtimeArgs": ["run", "dev"],
       "cwd": "${workspaceFolder}/frontend",
       "console": "integratedTerminal"
+    },
+    {
+      "name": "Tracing: Arize Phoenix Server",
+      "type": "python",
+      "request": "launch",
+      "module": "phoenix.server.main",
+      "args": ["serve"],
+      "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONIOENCODING": "utf-8",
+        "PHOENIX_HOST": "127.0.0.1"
+      },
+      "console": "integratedTerminal"
     }
   ],
   "compounds": [
     {
-      "name": "Full Application (Backend + Frontend)",
-      "configurations": ["Backend: FastAPI Server", "Frontend: Vite React Server"]
+      "name": "Full Application (Backend + Frontend + Tracing)",
+      "configurations": [
+        "Backend: FastAPI Server",
+        "Frontend: Vite React Server",
+        "Tracing: Arize Phoenix Server"
+      ]
     }
   ]
 }

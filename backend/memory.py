@@ -32,24 +32,71 @@ def calculate_cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
         return 0.0
     return float(dot_product / (norm_v1 * norm_v2))
 
+_gemini_embedding_failed = False
+
 def get_text_embedding(text: str) -> List[float]:
     """
     Generates embedding vector for a given text using LangChain Google/OpenAI embedding models.
     Falls back to a deterministic hash-based bag-of-words vector if keys are missing or API fails.
+    All calls are traced via OpenTelemetry so Arize Phoenix can monitor embedding latency and usage.
     """
+    global _gemini_embedding_failed
+
+    # Start an explicit OTel span so Phoenix captures embedding calls
+    # (LangChainInstrumentor only covers chat models, not standalone embed_query calls)
     try:
+        from opentelemetry import trace as otel_trace
+        tracer = otel_trace.get_tracer("catalyst-memory")
+    except Exception:
+        tracer = None
+
+    def _do_embed() -> List[float]:
         if LLM_PROVIDER == "openai" and OPENAI_API_KEY:
             from langchain_openai import OpenAIEmbeddings
             embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY, model="text-embedding-3-small")
             return embeddings.embed_query(text)
-        elif GEMINI_API_KEY:
+        elif GEMINI_API_KEY and not _gemini_embedding_failed:
             from langchain_google_genai import GoogleGenerativeAIEmbeddings
-            # Standard embedding model for Gemini
-            embeddings = GoogleGenerativeAIEmbeddings(google_api_key=GEMINI_API_KEY, model="models/text-embedding-004")
+            embeddings = GoogleGenerativeAIEmbeddings(google_api_key=GEMINI_API_KEY, model="models/embedding-001")
             return embeddings.embed_query(text)
-    except Exception as e:
-        print(f"Embedding API failed or not configured, using fallback: {e}")
-        
+        raise RuntimeError("No embedding provider available")
+
+    # Determine provider label for span attributes
+    if LLM_PROVIDER == "openai" and OPENAI_API_KEY:
+        provider_label = "openai"
+        model_label = "text-embedding-3-small"
+    elif GEMINI_API_KEY and not _gemini_embedding_failed:
+        provider_label = "google_gemini"
+        model_label = "models/embedding-001"
+    else:
+        provider_label = "fallback_hash_bow"
+        model_label = "token-hash-128"
+
+    if tracer:
+        with tracer.start_as_current_span("catalyst.embedding") as span:
+            span.set_attribute("embedding.provider", provider_label)
+            span.set_attribute("embedding.model", model_label)
+            span.set_attribute("embedding.input_chars", len(text))
+            span.set_attribute("embedding.is_fallback", _gemini_embedding_failed)
+            try:
+                vec = _do_embed()
+                span.set_attribute("embedding.dimensions", len(vec))
+                span.set_attribute("embedding.status", "success")
+                return vec
+            except Exception as e:
+                if not _gemini_embedding_failed:
+                    print(f"Embedding API failed or not configured, disabling and using fallback: {e}")
+                    _gemini_embedding_failed = True
+                span.set_attribute("embedding.status", "fallback")
+                span.set_attribute("embedding.error", str(e))
+    else:
+        try:
+            return _do_embed()
+        except Exception as e:
+            if not _gemini_embedding_failed:
+                print(f"Embedding API failed or not configured, disabling and using fallback: {e}")
+                _gemini_embedding_failed = True
+
     # Fallback: simple token-frequency embedding representation (size 128)
     vector = [0.0] * 128
     words = text.lower().split()
@@ -62,6 +109,7 @@ def get_text_embedding(text: str) -> List[float]:
     if norm > 0:
         vector = [v / norm for v in vector]
     return list(vector)
+
 
 def get_jaccard_similarity(str1: str, str2: str) -> float:
     """Calculates word-level Jaccard similarity between two strings."""

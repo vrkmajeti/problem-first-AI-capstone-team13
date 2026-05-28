@@ -3,7 +3,7 @@ import re
 from typing import TypedDict, List, Dict, Any, Tuple
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
-from backend.config import get_llm, FRESHNESS_LOOKBACK_MINUTES
+from backend.config import get_llm, get_llm_fast, FRESHNESS_LOOKBACK_MINUTES
 from backend.ingestion import get_news_payload
 from backend.routing import get_cross_impact_keywords, route_cross_impact
 from backend.memory import check_ledger_decision
@@ -228,7 +228,7 @@ def canonical_event_extraction_node(state: WorkflowState) -> Dict[str, Any]:
             
         return {"canonical_events": canonical_events}
 
-    llm = get_llm()
+    llm = get_llm_fast()
     
     # System instructions for batch canonical extraction
     system_prompt = """You are an expert financial news analyst. Your task is to analyze a list of news articles and extract a canonical structured event representation for each relevant article.
@@ -483,6 +483,7 @@ def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
             event_entry["impactPath"] = cand["impactPath"]
             event_entry["reasonForRouting"] = cand["reasonForRouting"]
             event_entry["pathConfidence"] = cand["pathConfidence"]
+            event_entry["pathStrength"] = cand.get("pathStrength", "strong")
             ticker_buckets[ticker]["crossImpactEvents"].append(event_entry)
             
     # 2. Run synthesis via LLM (or mock) for each ticker
@@ -636,6 +637,12 @@ You must output a JSON object matching this schema exactly:
   "uncertainties": ["specific uncertainties or unknowns for the trader to monitor"],
   "watchItems": ["specific ticker signals, announcements, or price markers to watch next"]
 }
+
+Cross-impact path strength:
+Each cross-impact event includes a "pathStrength" field indicating routing confidence:
+- "strong" (pathConfidence >= 0.70): The exposure path is well-supported. Include this event in mainCatalysts.
+- "weak" (pathConfidence 0.45–0.69): The exposure path is marginal. Do NOT include in mainCatalysts.
+  Instead, reference it only in watchItems or uncertainties (e.g., "Watch for confirmation of [event] impact via [path]").
 
 Strict Rules:
 1. ONLY utilize the facts provided in the prompt context. Do NOT invent companies, news, or metrics.

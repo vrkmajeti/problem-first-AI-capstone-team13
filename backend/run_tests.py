@@ -24,8 +24,12 @@ class TestWorkflow(unittest.TestCase):
         
         # A. Canonical Extraction Mocking
         if "extract a canonical structured event representation" in system_msg:
-            if "m5-announcement" in user_msg or "M5 Chip" in user_msg:
-                return MockResponse(json.dumps({
+            extracted = []
+            
+            # Helper to check article properties and map them
+            if "m5-announcement" in user_msg or "M5 Chip" in user_msg or "finnhub_direct_001" in user_msg:
+                event = {
+                    "articleId": "finnhub_direct_001",
                     "eventType": "supply_chain",
                     "eventSummary": "Apple unveils M5 chip utilizing TSMC 2nm technology.",
                     "hardFacts": ["Apple announced M5 chip family", "Uses TSMC 2nm lithography", "40% faster local LLM processing"],
@@ -38,9 +42,12 @@ class TestWorkflow(unittest.TestCase):
                     "possibleDirectionalPressure": "positive",
                     "uncertaintyNotes": ["yield rates of 2nm nodes"],
                     "evidence": ["announced its M5 chip family", "leverages TSMC's 2nm lithography"]
-                }))
-            elif "copilot-revenue" in user_msg or "Copilot Subscriptions" in user_msg:
-                return MockResponse(json.dumps({
+                }
+                extracted.append(event)
+                
+            if "copilot-revenue" in user_msg or "Copilot Subscriptions" in user_msg or "finnhub_direct_002" in user_msg:
+                event = {
+                    "articleId": "finnhub_direct_002",
                     "eventType": "earnings",
                     "eventSummary": "Microsoft exceeds guidance fueled by 28% cloud growth from Copilot.",
                     "hardFacts": ["Cloud revenue expanded 28%", "Boosted by Microsoft 365 Copilot adoption"],
@@ -53,10 +60,12 @@ class TestWorkflow(unittest.TestCase):
                     "possibleDirectionalPressure": "positive",
                     "uncertaintyNotes": ["sustainability of Copilot subscription growth"],
                     "evidence": ["cloud services grew 28%", "boosted by corporate adoption of Microsoft 365 Copilot"]
-                }))
-            elif "foxconn-fire" in user_msg or "Zhengzhou Assembly Zone" in user_msg:
-                # Article 1 of duplicate scenario
-                return MockResponse(json.dumps({
+                }
+                extracted.append(event)
+                
+            if "foxconn-fire" in user_msg or "Zhengzhou Assembly Zone" in user_msg or "finnhub_dup_001" in user_msg:
+                event = {
+                    "articleId": "finnhub_dup_001",
                     "eventType": "supply_chain",
                     "eventSummary": "Fire reported at electronics manufacturing zone in Zhengzhou.",
                     "hardFacts": ["fire in component warehouse", "Zhengzhou assembly zone", "no casualties"],
@@ -69,10 +78,12 @@ class TestWorkflow(unittest.TestCase):
                     "possibleDirectionalPressure": "negative",
                     "uncertaintyNotes": ["damage scale to inventory"],
                     "evidence": ["Zhengzhou assembly zone", "fire broke out in a component warehouse"]
-                }))
-            elif "factory-incident" in user_msg or "Zhengzhou Electronics Zone" in user_msg:
-                # Article 2 of duplicate scenario: identical summary, subset of facts -> duplicate!
-                return MockResponse(json.dumps({
+                }
+                extracted.append(event)
+                
+            if "factory-incident" in user_msg or "Zhengzhou Electronics Zone" in user_msg or "finnhub_dup_002" in user_msg:
+                event = {
+                    "articleId": "finnhub_dup_002",
                     "eventType": "supply_chain",
                     "eventSummary": "Fire reported at electronics manufacturing zone in Zhengzhou.",
                     "hardFacts": ["fire in component warehouse", "Zhengzhou assembly zone"],
@@ -85,10 +96,12 @@ class TestWorkflow(unittest.TestCase):
                     "possibleDirectionalPressure": "negative",
                     "uncertaintyNotes": ["production impact"],
                     "evidence": ["fire in a Zhengzhou electronics manufacturing plant", "examining potential damage"]
-                }))
-            elif "foxconn-halt" in user_msg or "Zhengzhou Fire Halted" in user_msg:
-                # Article 3 of duplicate scenario: similar summary, but adds new facts -> update!
-                return MockResponse(json.dumps({
+                }
+                extracted.append(event)
+                
+            if "foxconn-halt" in user_msg or "Zhengzhou Fire Halted" in user_msg or "finnhub_dup_003" in user_msg:
+                event = {
+                    "articleId": "finnhub_dup_003",
                     "eventType": "supply_chain",
                     "eventSummary": "Fire reported at electronics manufacturing zone in Zhengzhou halts lines.",
                     "hardFacts": ["fire in component warehouse", "Zhengzhou assembly zone", "assembly lines halted", "2 million iPhones delayed"],
@@ -101,9 +114,12 @@ class TestWorkflow(unittest.TestCase):
                     "possibleDirectionalPressure": "negative",
                     "uncertaintyNotes": ["duration of shutdown"],
                     "evidence": ["fire in Zhengzhou factory warehouse", "complete shutdown of advanced assembly lines", "delay shipment of 2 million iPhone units"]
-                }))
-            elif "taiwan-earthquake" in user_msg:
-                return MockResponse(json.dumps({
+                }
+                extracted.append(event)
+                
+            if "taiwan-earthquake" in user_msg or "currents_cross_001" in user_msg:
+                event = {
+                    "articleId": "currents_cross_001",
                     "eventType": "natural_disaster",
                     "eventSummary": "7.2 magnitude earthquake in Taiwan prompts foundry evacuations.",
                     "hardFacts": ["7.2 magnitude earthquake struck eastern Taiwan", "Semiconductor fabs in Hsinchu evacuated", "Possible calibration damage to lithography tools"],
@@ -116,9 +132,12 @@ class TestWorkflow(unittest.TestCase):
                     "possibleDirectionalPressure": "negative",
                     "uncertaintyNotes": ["calibration recovery time"],
                     "evidence": ["7.2 magnitude earthquake shook eastern Taiwan", "evacuated staff", "calibration damage to high-end lithography equipment"]
-                }))
-            elif "anthropic-claude" in user_msg:
-                return MockResponse(json.dumps({
+                }
+                extracted.append(event)
+                
+            if "anthropic-claude" in user_msg or "currents_cross_002" in user_msg:
+                event = {
+                    "articleId": "currents_cross_002",
                     "eventType": "private_company_technology",
                     "eventSummary": "Anthropic launches Claude 3.7 Sonnet setting coding benchmarks.",
                     "hardFacts": ["Anthropic launched Claude 3.7 Sonnet", "Outperforms platforms in coding, math, chemistry"],
@@ -131,9 +150,12 @@ class TestWorkflow(unittest.TestCase):
                     "possibleDirectionalPressure": "positive",
                     "uncertaintyNotes": ["pricing structures", "competitor response timeline"],
                     "evidence": ["launched Claude 3.7 Sonnet", "achieves state-of-the-art results"]
-                }))
-            elif "red-sea-disruption" in user_msg:
-                return MockResponse(json.dumps({
+                }
+                extracted.append(event)
+                
+            if "red-sea-disruption" in user_msg or "currents_cross_003" in user_msg:
+                event = {
+                    "articleId": "currents_cross_003",
                     "eventType": "geopolitical",
                     "eventSummary": "Drone strikes near Bab el-Mandeb reroute Red Sea shipping.",
                     "hardFacts": ["Cargo ships targeted by drone strikes in Bab el-Mandeb", "Red Sea route suspended", "Container rates surge 30%"],
@@ -146,7 +168,10 @@ class TestWorkflow(unittest.TestCase):
                     "possibleDirectionalPressure": "negative",
                     "uncertaintyNotes": ["duration of rerouting", "naval security intervention"],
                     "evidence": ["targeted by drone strikes near the Bab el-Mandeb", "suspension of Red Sea", "rates surged 30%"]
-                }))
+                }
+                extracted.append(event)
+                
+            return MockResponse(json.dumps(extracted))
 
         # B. Synthesis Mocking
         elif "review the direct and indirect catalyst events" in system_msg:
@@ -193,7 +218,8 @@ class TestWorkflow(unittest.TestCase):
             "routed_candidates": [],
             "ticker_buckets": {},
             "ticker_syntheses": {},
-            "duplicate_counts": {}
+            "duplicate_counts": {},
+            "ingestion_metadata": {}
         }
         
         final_state = self.workflow.invoke(initial_state)
@@ -227,7 +253,8 @@ class TestWorkflow(unittest.TestCase):
             "routed_candidates": [],
             "ticker_buckets": {},
             "ticker_syntheses": {},
-            "duplicate_counts": {}
+            "duplicate_counts": {},
+            "ingestion_metadata": {}
         }
         
         final_state = self.workflow.invoke(initial_state)
@@ -260,7 +287,8 @@ class TestWorkflow(unittest.TestCase):
             "routed_candidates": [],
             "ticker_buckets": {},
             "ticker_syntheses": {},
-            "duplicate_counts": {}
+            "duplicate_counts": {},
+            "ingestion_metadata": {}
         }
         
         final_state = self.workflow.invoke(initial_state)

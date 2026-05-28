@@ -87,7 +87,7 @@ export default function App() {
   const [watchlist, setWatchlist] = useState<string[]>([]);
   const [newTicker, setNewTicker] = useState('');
   const [iteration, setIteration] = useState<number>(3);
-  const [scenarioId, setScenarioId] = useState<string>('cross_impact');
+  const [scenarioId, setScenarioId] = useState<string>('live');
   const [activeTicker, setActiveTicker] = useState<string>('AAPL');
   const [runResult, setRunResult] = useState<RunResult | null>(null);
   const [graphData, setGraphData] = useState<ExposureGraph>({ nodes: [], edges: [] });
@@ -95,6 +95,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [phoenixStatus, setPhoenixStatus] = useState<any>({ running: false, dashboardUrl: '' });
   const [selectedCatalystPath, setSelectedCatalystPath] = useState<string[] | null>(null);
+  const [memoryStatus, setMemoryStatus] = useState<any>(null);
 
   // Fetch initial configuration
   useEffect(() => {
@@ -102,6 +103,7 @@ export default function App() {
     fetchGraph();
     fetchLedger();
     fetchPhoenixStatus();
+    fetchMemoryStatus();
   }, []);
 
   const fetchWatchlist = async () => {
@@ -144,6 +146,16 @@ export default function App() {
       setPhoenixStatus(data);
     } catch (e) {
       console.error('Error fetching Phoenix status', e);
+    }
+  };
+
+  const fetchMemoryStatus = async () => {
+    try {
+      const res = await fetch('/api/memory-status');
+      const data = await res.json();
+      setMemoryStatus(data);
+    } catch (e) {
+      console.error('Error fetching memory status', e);
     }
   };
 
@@ -209,7 +221,7 @@ export default function App() {
         body: JSON.stringify({
           iteration,
           scenario_id: scenarioId,
-          simulated_now: '2026-05-28T17:25:00Z'
+          simulated_now: scenarioId === 'live' ? new Date().toISOString() : '2026-05-28T17:25:00Z'
         })
       });
       if (!res.ok) {
@@ -219,6 +231,8 @@ export default function App() {
       const data = await res.json();
       setRunResult(data);
       fetchLedger();
+      fetchGraph();
+      fetchMemoryStatus();
     } catch (e: any) {
       alert(`Pipeline execution error: ${e.message}`);
     } finally {
@@ -784,6 +798,103 @@ export default function App() {
               ) : (
                 <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center', padding: '2rem' }}>
                   No active stories tracked in Catalyst Ledger.
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* Embeddings Memory Engine Panel */}
+          <section className="glass panel-card">
+            <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <Cpu size={14} /> Embeddings Memory Engine
+            </h2>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+              {memoryStatus ? (
+                <>
+                  {/* Provider badge row */}
+                  <div className="metric-row" style={{ alignItems: 'flex-start' }}>
+                    <span className="metric-label">Embed Provider</span>
+                    <span style={{
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      padding: '0.15rem 0.45rem',
+                      borderRadius: '4px',
+                      background: memoryStatus.isFallbackActive
+                        ? 'rgba(234, 88, 12, 0.12)'
+                        : 'rgba(6, 182, 212, 0.12)',
+                      color: memoryStatus.isFallbackActive
+                        ? 'var(--accent-orange)'
+                        : 'var(--accent-cyan)',
+                      border: `1px solid ${memoryStatus.isFallbackActive ? 'rgba(234,88,12,0.3)' : 'rgba(6,182,212,0.3)'}`
+                    }}>
+                      {memoryStatus.embedProvider}
+                    </span>
+                  </div>
+
+                  <div className="metric-row">
+                    <span className="metric-label">Extraction LLM</span>
+                    <span className="metric-value" style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: 'var(--accent-green)' }}>{memoryStatus.llmExtractionModel}</span>
+                  </div>
+
+                  <div className="metric-row">
+                    <span className="metric-label">Synthesis LLM</span>
+                    <span className="metric-value" style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: 'var(--accent-purple)' }}>{memoryStatus.llmSynthesisModel}</span>
+                  </div>
+
+                  <div className="metric-row">
+                    <span className="metric-label">Embed Model</span>
+                    <span className="metric-value" style={{ fontSize: '0.7rem', fontFamily: 'monospace' }}>{memoryStatus.embedModel}</span>
+                  </div>
+
+                  <div className="metric-row">
+                    <span className="metric-label">Vector Dims</span>
+                    <span className="metric-value">{memoryStatus.embedDimensions}d</span>
+                  </div>
+
+                  {/* Separator */}
+                  <div style={{ height: '1px', background: 'var(--border-color)', margin: '0.2rem 0' }} />
+
+                  <div className="metric-row">
+                    <span className="metric-label">Cosine Sim Threshold</span>
+                    <span className="metric-value" style={{ color: 'var(--accent-purple)' }}>&ge; {memoryStatus.similarityThreshold}</span>
+                  </div>
+
+                  <div className="metric-row">
+                    <span className="metric-label">Jaccard Fact Threshold</span>
+                    <span className="metric-value" style={{ color: 'var(--accent-blue)' }}>&ge; {memoryStatus.jaccardFactThreshold}</span>
+                  </div>
+
+                  {/* Separator */}
+                  <div style={{ height: '1px', background: 'var(--border-color)', margin: '0.2rem 0' }} />
+
+                  <div className="metric-row">
+                    <span className="metric-label">Live Stories</span>
+                    <span className="metric-value">{memoryStatus.ledgerLiveEntries} / {memoryStatus.ledgerTotalEntries}</span>
+                  </div>
+
+                  <div className="metric-row">
+                    <span className="metric-label">Vectors Stored</span>
+                    <span className="metric-value" style={{ color: 'var(--accent-green)' }}>{memoryStatus.ledgerEmbeddedEntries}</span>
+                  </div>
+
+                  {memoryStatus.isFallbackActive && (
+                    <div style={{
+                      marginTop: '0.35rem',
+                      padding: '0.4rem 0.5rem',
+                      background: 'rgba(234, 88, 12, 0.08)',
+                      border: '1px solid rgba(234,88,12,0.25)',
+                      borderRadius: '5px',
+                      fontSize: '0.7rem',
+                      color: 'var(--accent-orange)',
+                      lineHeight: 1.4
+                    }}>
+                      ⚠ Embedding API unavailable. Using hash-based bag-of-words fallback — deduplication accuracy is reduced.
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center', padding: '1.5rem' }}>
+                  Loading engine status...
                 </div>
               )}
             </div>

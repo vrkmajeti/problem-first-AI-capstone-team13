@@ -34,6 +34,10 @@ def add_graph_edge(edge: Dict[str, Any]):
     ]
     _graph_store["edges"].append(edge)
 
+def set_graph(graph: Dict[str, Any]):
+    global _graph_store
+    _graph_store = graph
+
 def get_cross_impact_keywords(watchlist: List[str]) -> List[str]:
     """
     Finds keywords and query terms from nearby nodes connected to watchlist tickers in the exposure graph.
@@ -213,8 +217,9 @@ def route_cross_impact(canonical_event: Dict[str, Any], watchlist: List[str]) ->
                 path_shortness_bonus = 0.75
                 
             path_score = event_severity * average_edge_confidence * path_shortness_bonus
-            
-            # Route if path score >= 0.45 (as per system design guidelines)
+
+            # Route if path score >= 0.45; tag "strong" (>=0.70) vs "weak" (0.45-0.69)
+            # so the synthesis LLM can treat marginal paths as watch items, not primary catalysts
             if path_score >= 0.45:
                 # Construct path details/explanation
                 explanations = []
@@ -224,9 +229,10 @@ def route_cross_impact(canonical_event: Dict[str, Any], watchlist: List[str]) ->
                     to_name = nodes[edge["toNodeId"]]["name"]
                     rel_type = edge["edgeType"]
                     explanations.append(f"{from_name} ({rel_type}) -> {to_name}. {notes}")
-                    
+
                 reason_for_routing = "; ".join(explanations)
-                
+                path_strength = "strong" if path_score >= 0.70 else "weak"
+
                 candidates.append({
                     "candidateId": f"cand_{target_ticker}_{canonical_event.get('eventId', '')[:8]}",
                     "ticker": target_ticker,
@@ -234,6 +240,7 @@ def route_cross_impact(canonical_event: Dict[str, Any], watchlist: List[str]) ->
                     "eventId": canonical_event.get("eventId"),
                     "impactPath": [nodes[nid]["name"] for nid in path_nodes],
                     "pathConfidence": round(path_score, 2),
+                    "pathStrength": path_strength,
                     "reasonForRouting": reason_for_routing
                 })
                 

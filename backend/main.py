@@ -1,3 +1,4 @@
+import copy
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -5,10 +6,13 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 
 from backend.config import init_phoenix, PHOENIX_PORT
-from backend.routing import get_graph, add_graph_node, add_graph_edge
+from backend.routing import get_graph, add_graph_node, add_graph_edge, set_graph
 from backend.memory import get_ledger, clear_ledger
 import backend.memory as _memory_module
+from backend.config import GEMINI_API_KEY, OPENAI_API_KEY, LLM_PROVIDER
 from backend.graph import build_workflow_graph
+from backend.persistence import load_watchlist, save_watchlist, load_graph, save_graph
+from backend.graph_expansion import expand_graph_for_ticker, GraphExpansionError
 
 app = FastAPI(title="Intraday Cross-Impact Catalyst Briefings API")
 
@@ -37,8 +41,10 @@ class WatchlistRequest(BaseModel):
 
 @app.on_event("startup")
 def startup_event():
-    # Initialize Arize Phoenix on startup
+    global _watchlist
     init_phoenix()
+    _watchlist = load_watchlist(default=_watchlist)
+    set_graph(load_graph(default=get_graph()))
 
 @app.get("/api/watchlist")
 def get_watchlist():
@@ -47,8 +53,35 @@ def get_watchlist():
 @app.post("/api/watchlist")
 def update_watchlist(req: WatchlistRequest):
     global _watchlist
+    previous_watchlist = list(_watchlist)
+
+    # Newly added tickers trigger a ONE-TIME exposure-graph expansion. Removals are
+    # left in the graph so cross-impact knowledge accumulates over time.
+    new_tickers = [t for t in req.tickers if t not in previous_watchlist]
+
+    # Snapshot the live graph so a mid-batch failure restores its exact prior state.
+    graph_snapshot = copy.deepcopy(get_graph())
+
+    # Run graph expansion BEFORE committing the watchlist so a configured-LLM failure
+    # rejects the whole change and leaves both watchlist and graph untouched.
+    expansions = []
+    for ticker in new_tickers:
+        try:
+            expansions.append(expand_graph_for_ticker(ticker))
+        except GraphExpansionError as e:
+            # Roll back any nodes/edges added for earlier tickers in this same request.
+            set_graph(graph_snapshot)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Watchlist update rejected: exposure-graph expansion failed for {ticker}. {e}",
+            )
+
     _watchlist = req.tickers
-    return {"tickers": _watchlist}
+    save_watchlist(_watchlist)
+    if new_tickers:
+        save_graph(get_graph())
+
+    return {"tickers": _watchlist, "graphExpansions": expansions}
 
 @app.get("/api/graph")
 def get_exposure_graph():
@@ -58,6 +91,7 @@ def get_exposure_graph():
 def add_node(node: Dict[str, Any]):
     try:
         add_graph_node(node)
+        save_graph(get_graph())
         return {"status": "success", "graph": get_graph()}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -66,6 +100,7 @@ def add_node(node: Dict[str, Any]):
 def add_edge(edge: Dict[str, Any]):
     try:
         add_graph_edge(edge)
+        save_graph(get_graph())
         return {"status": "success", "graph": get_graph()}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -147,6 +182,47 @@ def get_phoenix_status():
         "running": True,
         "dashboardUrl": f"http://127.0.0.1:{PHOENIX_PORT}",
         "projectName": "cross-impact-catalysts"
+    }
+
+@app.get("/api/memory-status")
+def get_memory_status():
+    """Returns the current status of the embedding engine and catalyst memory module."""
+    # Determine which embedding model is active
+    if LLM_PROVIDER == "openai" and OPENAI_API_KEY:
+        embed_provider = "OpenAI"
+        embed_model = "text-embedding-3-small"
+        embed_dimensions = 1536
+        llm_extraction_model = "gpt-4.1-nano"
+        llm_synthesis_model = "gpt-4o-mini"
+    elif GEMINI_API_KEY and not _memory_module._gemini_embedding_failed:
+        embed_provider = "Google Gemini"
+        embed_model = "models/embedding-001"
+        embed_dimensions = 768
+        llm_extraction_model = "gemini-2.5-flash"
+        llm_synthesis_model = "gemini-2.5-flash"
+    else:
+        embed_provider = "Fallback (Hash BoW)"
+        embed_model = "token-hash-128"
+        embed_dimensions = 128
+        llm_extraction_model = "N/A"
+        llm_synthesis_model = "N/A"
+
+    # Count live ledger entries that have an embedding vector
+    live_entries = [e for e in _memory_module._ledger_store if e.get("status") == "live"]
+    embedded_entries = [e for e in live_entries if e.get("embedding_vec")]
+
+    return {
+        "embedProvider": embed_provider,
+        "embedModel": embed_model,
+        "embedDimensions": embed_dimensions,
+        "isFallbackActive": _memory_module._gemini_embedding_failed,
+        "similarityThreshold": 0.75,
+        "jaccardFactThreshold": 0.6,
+        "ledgerTotalEntries": len(_memory_module._ledger_store),
+        "ledgerLiveEntries": len(live_entries),
+        "ledgerEmbeddedEntries": len(embedded_entries),
+        "llmExtractionModel": llm_extraction_model,
+        "llmSynthesisModel": llm_synthesis_model,
     }
 
 def datetime_now():
