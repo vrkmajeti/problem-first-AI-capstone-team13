@@ -874,8 +874,27 @@ The first implementation should use a strong mid-tier model. A high-reasoning mo
 |---|---|---|---|
 | Batch canonical event extraction | Strong mid-tier LLM | Runtime | Convert a batch of multiple articles/event texts into a structured list of canonical events in a single LLM call |
 | Per-ticker synthesis | Strong mid-tier LLM | Runtime | Generate one final market-impact synthesis per watched ticker from ticker-specific context only |
-| Embeddings | Embedding model | Runtime | Cluster similar event summaries for catalyst memory |
+| Catalyst-dedup embeddings | Local embedding model (no API) | Runtime | Cluster similar event summaries for catalyst memory. Runs **locally** via `fastembed` (BAAI/bge-small-en-v1.5, 384d, ONNX/CPU). No remote embedding API and no per-call cost. Falls back to a deterministic lexical cosine if the model cannot load. |
 | LLM judge | Strong LLM | Offline eval | Evaluate faithfulness and impact-path explanation quality |
+
+### 4.2.1 Why a local embedding model for catalyst dedup
+
+The catalyst ledger needs to decide whether a fresh event summary is the same story as one it already saw. The first implementation used a **remote embedding API** (Gemini `embedding-001` / OpenAI `text-embedding-3-small`), which charged per call on every candidate event and every update — the main recurring cost in the dedup path.
+
+This is the wrong place to spend an API budget. The job is narrow: near-duplicate clustering of short, already-LLM-normalized summaries within a single `(ticker, event_type)` group under a 1-day TTL. That quality is fully achievable with a **small local model**, so the system now embeds locally:
+
+```text
+Primary:  local ONNX model via fastembed (BAAI/bge-small-en-v1.5, 384 dims).
+          Downloaded once (~50 MB), then runs offline on CPU. $0 per call.
+          Preserves semantic recall — it catches paraphrased duplicates of the
+          same catalyst that a purely lexical match would miss.
+Fallback: deterministic lexical token-frequency cosine. Zero extra dependencies,
+          fully reproducible/auditable. Used automatically if the model cannot load.
+```
+
+Why not pure lexical only? Real LLM extraction paraphrases the same story heavily across syndicated articles (e.g. "fire affected iPhone assembly lines" vs "fire challenged smartphone supply chains" — ~0.3 lexical cosine but ~0.83 semantic cosine). A neural embedding bridges that gap and keeps duplicate suppression accurate; the lexical path is the safety net, not the default.
+
+Why not keep the remote API? It adds cost and a network dependency for a task a local model does as well, and it makes offline/deterministic evaluation harder.
 
 ## 4.3 Why not fine-tuning
 
@@ -1175,12 +1194,12 @@ The difference from Iteration 1 is not the source. The difference is memory.
 ```text
 ticker_focus,
 event_type,
-semantic event embedding,
+semantic event embedding (local model; see §4.2.1),
 hard facts,
 source timestamp.
 ```
 
-Embeddings are used for near-duplicate clustering, not for open-ended RAG.
+Embeddings are used for near-duplicate clustering, not for open-ended RAG, and are computed by a local model at no per-call cost.
 
 ### Ledger decision rules
 
@@ -1653,6 +1672,7 @@ freshness filter result,
 canonical extraction output,
 direct/cross-impact routing decision,
 exposure graph path,
+catalyst dedup similarity span (local embedding or lexical fallback, score, method),
 ledger decision,
 per-ticker synthesis prompt/output,
 latency, token usage, cost,
@@ -1877,8 +1897,10 @@ number of fetched articles,
 number of Currents queries,
 number of LLM extraction calls,
 number of event extraction calls and per-ticker synthesis calls,
-embedding calls for catalyst memory,
 LLM judge calls during offline eval.
+
+(Catalyst-memory embeddings are no longer a cost driver: dedup embeddings run on a
+local model with no per-call API cost.)
 ```
 
 ## 12.2 Latency strategy
@@ -1958,7 +1980,7 @@ This is not a classic RAG system. The main memory requirement is not “retrieve
 
 > Have we already seen this catalyst, and did it materially develop?
 
-Therefore, the system uses a recent-catalyst ledger with embeddings for near-duplicate clustering. This is narrower and more controllable than a general vector knowledge base.
+Therefore, the system uses a recent-catalyst ledger with **local** embeddings for near-duplicate clustering (see §4.2.1). This is narrower and more controllable than a general vector knowledge base, and it needs no remote embedding API.
 
 ## 13.3 LLM-only butterfly reasoning versus exposure graph
 
@@ -2157,7 +2179,7 @@ simple UI/feed output.
 ## Should build
 
 ```text
-embedding-based near-duplicate matching,
+local embedding-based near-duplicate matching (lexical-cosine fallback),
 LLM judge eval script,
 path-validity eval,
 source-quality flags,
@@ -2415,7 +2437,7 @@ export type CatalystLedgerEntry = {
   eventType: CanonicalEvent["eventType"];
   relationshipType: "direct" | "indirect";
   canonicalSummary: string;
-  embeddingRef?: string;
+  embeddingVec?: number[]; // local embedding of canonicalSummary (null under lexical fallback)
   firstSeenAt: string;
   lastUpdatedAt: string;
   expiresAt: string;

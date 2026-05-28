@@ -57,8 +57,8 @@ problem-first-AI-capstone-team13/
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GEMINI_API_KEY` | `""` | Google Gemini LLM and embeddings |
-| `OPENAI_API_KEY` | `""` | OpenAI LLM and embeddings |
+| `GEMINI_API_KEY` | `""` | Google Gemini LLM (extraction + synthesis; not embeddings) |
+| `OPENAI_API_KEY` | `""` | OpenAI LLM (extraction + synthesis; not embeddings) |
 | `LLM_PROVIDER` | `"gemini"` | Selects active provider; `"openai"` or `"gemini"` |
 | `FINNHUB_API_KEY` | `""` | Live Finnhub company-news API |
 | `CURRENTS_API_KEY` | `""` | Live Currents cross-impact news API |
@@ -317,35 +317,40 @@ Initialized from `seed_data.EXPOSURE_GRAPH` at module import. Mutations via `add
 
 `_ledger_store: List[Dict[str, Any]] = []` (`memory.py:7`) — process-level list, cleared by `clear_ledger()` or on restart.
 
-`_gemini_embedding_failed: bool = False` (`memory.py:35`) — module-level flag, set to `True` on first embedding API failure; prevents repeated retries.
+`_embedding_unavailable: bool = False` — module-level flag, set to `True` if the local embedding model cannot be loaded; thereafter the dedup engine uses the lexical fallback.
 
-### Embedding Engine (`memory.py:37-111`)
+### Dedup Embedding Engine (local, no API)
 
-`get_text_embedding(text)`:
-1. **OpenAI path** (if `LLM_PROVIDER == "openai"` and key set): `langchain_openai.OpenAIEmbeddings`, model `text-embedding-3-small`, 1536 dimensions.
-2. **Gemini path** (if key set and not failed): `langchain_google_genai.GoogleGenerativeAIEmbeddings`, model `models/embedding-001`, 768 dimensions.
-3. **Fallback hash-BoW** (always): 128-dimension normalized token-frequency vector using `hash(word) % 128` (`memory.py:101-111`).
+Catalyst dedup runs entirely **locally** — there is no remote embedding API and no per-call cost.
 
-Each call wraps the embedding in an explicit OpenTelemetry span (`catalyst.embedding`) with attributes: `embedding.provider`, `embedding.model`, `embedding.input_chars`, `embedding.dimensions`, `embedding.status` (`memory.py:76-98`).
+`get_text_embedding(text) -> Optional[List[float]]`:
+1. **Primary:** local `fastembed.TextEmbedding` model (`BAAI/bge-small-en-v1.5`, 384 dimensions, ONNX/CPU), loaded once as a lazy singleton via `_get_embedding_model()`. Model name overridable with the `EMBEDDING_MODEL` env var.
+2. **Returns `None`** if the model is unavailable, signalling callers to use the lexical fallback.
+
+Embedding calls are wrapped in an OpenTelemetry span (`catalyst.embedding`, provider `local_fastembed`). The lexical fallback path emits a `catalyst.similarity` span (`similarity.method = lexical_tf_cosine`, `similarity.score`).
+
+`is_embedding_active()` — reports whether the neural engine loaded (used by `/api/memory-status`).
 
 ### Similarity Functions
 
-`calculate_cosine_similarity(vec1, vec2)` (`memory.py:24-33`) — numpy dot product / norms.
+`calculate_cosine_similarity(vec1, vec2)` — numpy dot product / norms over embedding vectors (primary path).
 
-`get_jaccard_similarity(str1, str2)` (`memory.py:114-122`) — word-level set intersection/union.
+`calculate_text_similarity(text1, text2)` — deterministic lexical token-frequency cosine (stopword-filtered). Fallback matcher when no embedding model is available.
 
-`check_for_new_facts(event_facts, ledger_facts)` (`memory.py:124-145`) — a fact is "new" if its Jaccard similarity to every existing ledger fact is `< 0.6`.
+`get_jaccard_similarity(str1, str2)` — word-level set intersection/union.
 
-### Ledger Decision Logic (`memory.py:147-223`)
+`check_for_new_facts(event_facts, ledger_facts)` — a fact is "new" if its Jaccard similarity to every existing ledger fact is `< 0.6`.
+
+### Ledger Decision Logic
 
 `check_ledger_decision(ticker, canonical_event, similarity_threshold=0.75)`:
 
 1. Filters `_ledger_store` to active entries matching `ticker` and `eventType`.
-2. Embeds the incoming `eventSummary`.
-3. Computes cosine similarity against all matching live entries with embedding vectors.
+2. Computes the local embedding of the incoming `eventSummary` (may be `None`).
+3. For each candidate entry: uses **embedding cosine** when both vectors exist, else falls back to **lexical cosine** over summaries.
 4. **If best match `>= 0.75`:**
    - Checks `check_for_new_facts`. If new facts exist → `"update"`: appends facts, updates `canonicalSummary`, re-embeds entry. If no new facts → `"duplicate"`: logs article ID only.
-5. **If no match `>= 0.75`:** Creates new ledger entry with 1-day TTL, returns `"new"`.
+5. **If no match `>= 0.75`:** Creates new ledger entry with 1-day TTL (storing `embedding_vec`), returns `"new"`.
 
 **Ledger entry schema:**
 ```
@@ -503,7 +508,7 @@ main.py /api/run
           → find_paths_to_watchlist() [DFS on _graph_store]
   → graph.py: ledger_memory_node
       → memory.py: check_ledger_decision()
-          → get_text_embedding() → Gemini/OpenAI/hash-BoW
+          → get_text_embedding() → local fastembed (or lexical-cosine fallback)
           → calculate_cosine_similarity()
           → check_for_new_facts()
           → _ledger_store mutation

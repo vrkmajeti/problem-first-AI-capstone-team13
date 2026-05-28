@@ -64,7 +64,7 @@ Defines backend dependencies including:
 - `fastapi`, `uvicorn` (server)
 - `langgraph`, `langchain-core`, `langchain-google-genai` (LLM workflows)
 - `arize-phoenix`, `openinference-instrumentation-langchain` (traceability)
-- `sentence-transformers` or `numpy` (local embeddings for catalyst ledger similarity checks)
+- `fastembed`, `numpy` (local embeddings for catalyst ledger similarity checks; no embedding API)
 - `pydantic`, `python-dotenv`, `requests`
 
 #### [NEW] [config.py](file:///d:/git/problem-first-AI-capstone-team13/backend/config.py)
@@ -102,7 +102,7 @@ Implements deterministic path routing and scoring over the exposure graph:
 #### [NEW] [memory.py](file:///d:/git/problem-first-AI-capstone-team13/backend/memory.py)
 Implements the **Catalyst Ledger**:
 - Stores fingerprints of active catalysts: `(ticker, event_type, embedding, hard_facts, first_seen_at)`.
-- Calculates semantic similarity of new canonical event summaries against active ledger entries (cosine similarity of embeddings).
+- Calculates semantic similarity of new canonical event summaries against active ledger entries using a **local** embedding model (`fastembed`, cosine similarity), with a deterministic lexical-cosine fallback. No embedding API / no per-call cost.
 - Validates hard fact changes to distinguish between **duplicates** (suppressed) and **meaningful updates** (causes a briefing update).
 
 #### [NEW] [graph.py](file:///d:/git/problem-first-AI-capstone-team13/backend/graph.py)

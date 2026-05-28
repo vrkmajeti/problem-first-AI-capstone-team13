@@ -201,12 +201,16 @@ class TestWorkflow(unittest.TestCase):
 
         raise ValueError(f"Mock got unexpected message patterns: {messages}")
 
+    @patch('backend.graph.get_llm_fast')
     @patch('backend.graph.get_llm')
-    def test_iteration_1_direct_news(self, mock_get_llm):
+    def test_iteration_1_direct_news(self, mock_get_llm, mock_get_llm_fast):
         """Test Iteration 1 direct company news path without duplicates."""
         mock_llm = MagicMock()
         mock_llm.invoke = self.mock_llm_invoke
         mock_get_llm.return_value = mock_llm
+        # Extraction (Node 2) uses get_llm_fast; mock it too so the test is deterministic
+        # and does not hit the real LLM API.
+        mock_get_llm_fast.return_value = mock_llm
 
         initial_state = {
             "iteration": 1,
@@ -236,12 +240,14 @@ class TestWorkflow(unittest.TestCase):
         self.assertIn("AAPL", final_state["ticker_syntheses"])
         self.assertIn("MSFT", final_state["ticker_syntheses"])
 
+    @patch('backend.graph.get_llm_fast')
     @patch('backend.graph.get_llm')
-    def test_iteration_2_ledger_duplicates(self, mock_get_llm):
+    def test_iteration_2_ledger_duplicates(self, mock_get_llm, mock_get_llm_fast):
         """Test Iteration 2 catalyst memory deduplication and update detection."""
         mock_llm = MagicMock()
         mock_llm.invoke = self.mock_llm_invoke
         mock_get_llm.return_value = mock_llm
+        mock_get_llm_fast.return_value = mock_llm
 
         initial_state = {
             "iteration": 2,
@@ -270,12 +276,14 @@ class TestWorkflow(unittest.TestCase):
         # Duplicate count for AAPL should be 1
         self.assertEqual(final_state["duplicate_counts"].get("AAPL", 0), 1)
 
+    @patch('backend.graph.get_llm_fast')
     @patch('backend.graph.get_llm')
-    def test_iteration_3_cross_impact_routing(self, mock_get_llm):
+    def test_iteration_3_cross_impact_routing(self, mock_get_llm, mock_get_llm_fast):
         """Test Iteration 3 cross impact graph routing for untickered events."""
         mock_llm = MagicMock()
         mock_llm.invoke = self.mock_llm_invoke
         mock_get_llm.return_value = mock_llm
+        mock_get_llm_fast.return_value = mock_llm
 
         initial_state = {
             "iteration": 3,

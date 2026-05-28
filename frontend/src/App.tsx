@@ -813,7 +813,7 @@ export default function App() {
                 <>
                   {/* Provider badge row */}
                   <div className="metric-row" style={{ alignItems: 'flex-start' }}>
-                    <span className="metric-label">Embed Provider</span>
+                    <span className="metric-label">Dedup Engine</span>
                     <span style={{
                       fontSize: '0.72rem',
                       fontWeight: 700,
@@ -827,7 +827,7 @@ export default function App() {
                         : 'var(--accent-cyan)',
                       border: `1px solid ${memoryStatus.isFallbackActive ? 'rgba(234,88,12,0.3)' : 'rgba(6,182,212,0.3)'}`
                     }}>
-                      {memoryStatus.embedProvider}
+                      {memoryStatus.dedupProvider}
                     </span>
                   </div>
 
@@ -842,13 +842,8 @@ export default function App() {
                   </div>
 
                   <div className="metric-row">
-                    <span className="metric-label">Embed Model</span>
-                    <span className="metric-value" style={{ fontSize: '0.7rem', fontFamily: 'monospace' }}>{memoryStatus.embedModel}</span>
-                  </div>
-
-                  <div className="metric-row">
-                    <span className="metric-label">Vector Dims</span>
-                    <span className="metric-value">{memoryStatus.embedDimensions}d</span>
+                    <span className="metric-label">Method</span>
+                    <span className="metric-value" style={{ fontSize: '0.7rem', fontFamily: 'monospace' }}>{memoryStatus.dedupModel}</span>
                   </div>
 
                   {/* Separator */}
@@ -888,7 +883,7 @@ export default function App() {
                       color: 'var(--accent-orange)',
                       lineHeight: 1.4
                     }}>
-                      ⚠ Embedding API unavailable. Using hash-based bag-of-words fallback — deduplication accuracy is reduced.
+                      ⚠ Local embedding model unavailable. Using deterministic lexical cosine fallback — paraphrase dedup recall is reduced.
                     </div>
                   )}
                 </>

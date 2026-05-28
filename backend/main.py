@@ -186,36 +186,39 @@ def get_phoenix_status():
 
 @app.get("/api/memory-status")
 def get_memory_status():
-    """Returns the current status of the embedding engine and catalyst memory module."""
-    # Determine which embedding model is active
+    """Returns the current status of the catalyst dedup engine and memory module."""
+    # The dedup engine runs LOCALLY at $0/call — no remote embedding API.
+    # Primary: local fastembed neural embeddings. Fallback: lexical token cosine.
+    embedding_active = _memory_module.is_embedding_active()
+    if embedding_active:
+        dedup_provider = "Local embeddings"
+        dedup_model = f"{_memory_module._EMBEDDING_MODEL_NAME} (384d)"
+        dedup_method = "neural_cosine"
+    else:
+        dedup_provider = "Local (lexical fallback)"
+        dedup_model = "tf-cosine + jaccard"
+        dedup_method = "lexical_cosine"
+
+    # LLM model reporting still depends on the configured provider.
     if LLM_PROVIDER == "openai" and OPENAI_API_KEY:
-        embed_provider = "OpenAI"
-        embed_model = "text-embedding-3-small"
-        embed_dimensions = 1536
         llm_extraction_model = "gpt-4.1-nano"
         llm_synthesis_model = "gpt-4o-mini"
-    elif GEMINI_API_KEY and not _memory_module._gemini_embedding_failed:
-        embed_provider = "Google Gemini"
-        embed_model = "models/embedding-001"
-        embed_dimensions = 768
+    elif GEMINI_API_KEY:
         llm_extraction_model = "gemini-2.5-flash"
         llm_synthesis_model = "gemini-2.5-flash"
     else:
-        embed_provider = "Fallback (Hash BoW)"
-        embed_model = "token-hash-128"
-        embed_dimensions = 128
         llm_extraction_model = "N/A"
         llm_synthesis_model = "N/A"
 
-    # Count live ledger entries that have an embedding vector
     live_entries = [e for e in _memory_module._ledger_store if e.get("status") == "live"]
     embedded_entries = [e for e in live_entries if e.get("embedding_vec")]
 
     return {
-        "embedProvider": embed_provider,
-        "embedModel": embed_model,
-        "embedDimensions": embed_dimensions,
-        "isFallbackActive": _memory_module._gemini_embedding_failed,
+        "dedupProvider": dedup_provider,
+        "dedupModel": dedup_model,
+        "dedupMethod": dedup_method,
+        # isFallbackActive=True means the lexical fallback is in use (embedding model unavailable).
+        "isFallbackActive": not embedding_active,
         "similarityThreshold": 0.75,
         "jaccardFactThreshold": 0.6,
         "ledgerTotalEntries": len(_memory_module._ledger_store),

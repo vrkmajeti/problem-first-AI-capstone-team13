@@ -1,10 +1,121 @@
-from typing import List, Dict, Any, Tuple
-import numpy as np
+import math
+import os
+import re
+from collections import Counter
+from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime, timezone, timedelta
-from backend.config import GEMINI_API_KEY, OPENAI_API_KEY, LLM_PROVIDER
+
+import numpy as np
 
 # In-memory storage for the Catalyst Ledger entries
 _ledger_store: List[Dict[str, Any]] = []
+
+# ----------------------------------------------------------------------------
+# Catalyst near-duplicate detection engine
+# ----------------------------------------------------------------------------
+# Previously every candidate event triggered a paid/quota'd REMOTE embedding API
+# call (Gemini embedding-001 / OpenAI text-embedding-3-small). That was the main
+# recurring cost in the dedup path. It is replaced by a LOCAL engine with $0/call:
+#
+#   Primary  : local ONNX embedding model via `fastembed` (BAAI/bge-small-en-v1.5,
+#              384 dims). Downloaded once (~50 MB), then runs offline on CPU with no
+#              network call and no per-call cost. Preserves the semantic dedup quality
+#              of the old API path — it catches paraphrased duplicates of the same
+#              catalyst that a purely lexical match would miss.
+#   Fallback : deterministic lexical token-frequency cosine (`calculate_text_similarity`).
+#              Zero extra dependencies. Used automatically if the embedding model cannot
+#              be loaded (e.g. offline first-run with no cached model). Lower recall on
+#              heavy paraphrases but fully deterministic and auditable.
+#
+# Either way there is no remote embedding API and no ongoing embedding cost.
+
+# Embedding model name (overridable via env for experimentation).
+_EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+
+# Lazily-initialised singleton + availability flag.
+_embedding_model = None
+_embedding_unavailable = False
+
+# Small English stopword set so common filler words don't inflate similarity scores.
+_STOPWORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "have",
+    "in", "into", "is", "it", "its", "of", "on", "or", "that", "the", "to", "was",
+    "were", "will", "with",
+})
+
+
+def _tokenize(text: str) -> List[str]:
+    """Lowercase, alphanumeric tokenization with stopword removal."""
+    tokens = re.findall(r"[a-z0-9]+", text.lower())
+    return [t for t in tokens if t not in _STOPWORDS]
+
+
+def _get_embedding_model():
+    """Lazily load the local fastembed model. Returns None if unavailable."""
+    global _embedding_model, _embedding_unavailable
+    if _embedding_unavailable:
+        return None
+    if _embedding_model is None:
+        try:
+            from fastembed import TextEmbedding
+            _embedding_model = TextEmbedding(model_name=_EMBEDDING_MODEL_NAME)
+        except Exception as e:
+            print(f"Local embedding model unavailable ({e}). Falling back to lexical similarity.")
+            _embedding_unavailable = True
+            return None
+    return _embedding_model
+
+
+def is_embedding_active() -> bool:
+    """Whether the local neural embedding engine is loaded and in use (vs lexical fallback)."""
+    return _get_embedding_model() is not None
+
+
+def get_text_embedding(text: str) -> Optional[List[float]]:
+    """
+    Returns a local embedding vector for `text`, or None if the embedding model is
+    unavailable (in which case callers fall back to lexical similarity).
+
+    Wrapped in an OpenTelemetry span so Arize Phoenix still captures dedup embedding
+    activity — now as a $0 local CPU computation rather than a remote API call.
+    """
+    model = _get_embedding_model()
+    if model is None:
+        return None
+
+    try:
+        from opentelemetry import trace as otel_trace
+        tracer = otel_trace.get_tracer("catalyst-memory")
+    except Exception:
+        tracer = None
+
+    def _embed() -> List[float]:
+        # fastembed returns a generator of numpy arrays
+        vec = next(iter(model.embed([text])))
+        return [float(x) for x in vec]
+
+    if tracer:
+        with tracer.start_as_current_span("catalyst.embedding") as span:
+            span.set_attribute("embedding.provider", "local_fastembed")
+            span.set_attribute("embedding.model", _EMBEDDING_MODEL_NAME)
+            span.set_attribute("embedding.input_chars", len(text))
+            vec = _embed()
+            span.set_attribute("embedding.dimensions", len(vec))
+            span.set_attribute("embedding.status", "success")
+            return vec
+    return _embed()
+
+
+def calculate_cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+    """Cosine similarity between two embedding vectors."""
+    v1 = np.asarray(vec1, dtype=float)
+    v2 = np.asarray(vec2, dtype=float)
+    norm1 = np.linalg.norm(v1)
+    norm2 = np.linalg.norm(v2)
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+    return float(np.dot(v1, v2) / (norm1 * norm2))
+
 
 def get_ledger() -> List[Dict[str, Any]]:
     """Returns all active ledger entries."""
@@ -21,94 +132,47 @@ def clear_ledger():
     global _ledger_store
     _ledger_store = []
 
-def calculate_cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
-    """Calculates cosine similarity between two vectors."""
-    v1 = np.array(vec1)
-    v2 = np.array(vec2)
-    dot_product = np.dot(v1, v2)
-    norm_v1 = np.linalg.norm(v1)
-    norm_v2 = np.linalg.norm(v2)
-    if norm_v1 == 0 or norm_v2 == 0:
-        return 0.0
-    return float(dot_product / (norm_v1 * norm_v2))
-
-_gemini_embedding_failed = False
-
-def get_text_embedding(text: str) -> List[float]:
+def calculate_text_similarity(text1: str, text2: str) -> float:
     """
-    Generates embedding vector for a given text using LangChain Google/OpenAI embedding models.
-    Falls back to a deterministic hash-based bag-of-words vector if keys are missing or API fails.
-    All calls are traced via OpenTelemetry so Arize Phoenix can monitor embedding latency and usage.
-    """
-    global _gemini_embedding_failed
+    Deterministic lexical similarity between two short texts using token-frequency
+    (term-frequency) cosine similarity.
 
-    # Start an explicit OTel span so Phoenix captures embedding calls
-    # (LangChainInstrumentor only covers chat models, not standalone embed_query calls)
+    This is the FALLBACK matcher, used when the local neural embedding model is not
+    available. There are no fixed-size vectors and no hashing, so there are no
+    collisions: each text is represented as a sparse Counter of its (stopword-filtered)
+    tokens, and cosine is computed over the shared vocabulary. Returns a value in
+    [0.0, 1.0].
+
+    The call is wrapped in an OpenTelemetry span so Arize Phoenix still shows catalyst
+    dedup activity (a near-zero-latency local computation, no API call).
+    """
     try:
         from opentelemetry import trace as otel_trace
         tracer = otel_trace.get_tracer("catalyst-memory")
     except Exception:
         tracer = None
 
-    def _do_embed() -> List[float]:
-        if LLM_PROVIDER == "openai" and OPENAI_API_KEY:
-            from langchain_openai import OpenAIEmbeddings
-            embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY, model="text-embedding-3-small")
-            return embeddings.embed_query(text)
-        elif GEMINI_API_KEY and not _gemini_embedding_failed:
-            from langchain_google_genai import GoogleGenerativeAIEmbeddings
-            embeddings = GoogleGenerativeAIEmbeddings(google_api_key=GEMINI_API_KEY, model="models/embedding-001")
-            return embeddings.embed_query(text)
-        raise RuntimeError("No embedding provider available")
-
-    # Determine provider label for span attributes
-    if LLM_PROVIDER == "openai" and OPENAI_API_KEY:
-        provider_label = "openai"
-        model_label = "text-embedding-3-small"
-    elif GEMINI_API_KEY and not _gemini_embedding_failed:
-        provider_label = "google_gemini"
-        model_label = "models/embedding-001"
-    else:
-        provider_label = "fallback_hash_bow"
-        model_label = "token-hash-128"
+    def _compute() -> float:
+        c1 = Counter(_tokenize(text1))
+        c2 = Counter(_tokenize(text2))
+        if not c1 or not c2:
+            return 0.0
+        common = set(c1) & set(c2)
+        dot = sum(c1[t] * c2[t] for t in common)
+        if dot == 0:
+            return 0.0
+        norm1 = math.sqrt(sum(v * v for v in c1.values()))
+        norm2 = math.sqrt(sum(v * v for v in c2.values()))
+        return dot / (norm1 * norm2)
 
     if tracer:
-        with tracer.start_as_current_span("catalyst.embedding") as span:
-            span.set_attribute("embedding.provider", provider_label)
-            span.set_attribute("embedding.model", model_label)
-            span.set_attribute("embedding.input_chars", len(text))
-            span.set_attribute("embedding.is_fallback", _gemini_embedding_failed)
-            try:
-                vec = _do_embed()
-                span.set_attribute("embedding.dimensions", len(vec))
-                span.set_attribute("embedding.status", "success")
-                return vec
-            except Exception as e:
-                if not _gemini_embedding_failed:
-                    print(f"Embedding API failed or not configured, disabling and using fallback: {e}")
-                    _gemini_embedding_failed = True
-                span.set_attribute("embedding.status", "fallback")
-                span.set_attribute("embedding.error", str(e))
-    else:
-        try:
-            return _do_embed()
-        except Exception as e:
-            if not _gemini_embedding_failed:
-                print(f"Embedding API failed or not configured, disabling and using fallback: {e}")
-                _gemini_embedding_failed = True
-
-    # Fallback: simple token-frequency embedding representation (size 128)
-    vector = [0.0] * 128
-    words = text.lower().split()
-    for word in words:
-        # Simple hash routing to generate a pseudo-random but deterministic feature index
-        idx = hash(word) % 128
-        vector[idx] += 1.0
-    # Normalize vector
-    norm = np.linalg.norm(vector)
-    if norm > 0:
-        vector = [v / norm for v in vector]
-    return list(vector)
+        with tracer.start_as_current_span("catalyst.similarity") as span:
+            span.set_attribute("similarity.method", "lexical_tf_cosine")
+            span.set_attribute("similarity.input_chars", len(text1) + len(text2))
+            score = _compute()
+            span.set_attribute("similarity.score", score)
+            return score
+    return _compute()
 
 
 def get_jaccard_similarity(str1: str, str2: str) -> float:
@@ -163,17 +227,23 @@ def check_ledger_decision(ticker: str, canonical_event: Dict[str, Any], similari
         if entry["ticker"] == ticker and entry["eventType"] == event_type and entry["status"] == "live"
     ]
     
-    # Calculate embedding for the current event summary
+    # Compute the local embedding of the incoming summary once (None if model unavailable).
     event_embedding = get_text_embedding(event_summary)
-    
+
     best_entry = None
     highest_sim = 0.0
-    
+
     for entry in active_entries:
-        entry_emb = entry.get("embedding_vec")
-        if not entry_emb:
+        entry_summary = entry.get("canonicalSummary", "")
+        if not entry_summary:
             continue
-        sim = calculate_cosine_similarity(event_embedding, entry_emb)
+        entry_emb = entry.get("embedding_vec")
+        if event_embedding is not None and entry_emb:
+            # Primary path: semantic cosine over local embedding vectors.
+            sim = calculate_cosine_similarity(event_embedding, entry_emb)
+        else:
+            # Fallback path: deterministic lexical cosine over summaries.
+            sim = calculate_text_similarity(event_summary, entry_summary)
         if sim > highest_sim:
             highest_sim = sim
             best_entry = entry
@@ -191,8 +261,10 @@ def check_ledger_decision(ticker: str, canonical_event: Dict[str, Any], similari
             best_entry["memberArticleIds"] = list(set(best_entry["memberArticleIds"] + article_ids))
             best_entry["hardFactsSeen"] = list(set(best_entry["hardFactsSeen"] + event_facts))
             best_entry["canonicalSummary"] = f"{best_entry['canonicalSummary']} Update: {event_summary}"
-            # Recalculate embedding with updated summary
-            best_entry["embedding_vec"] = get_text_embedding(best_entry["canonicalSummary"])
+            # Refresh the stored embedding to reflect the updated summary (no-op under lexical fallback).
+            updated_emb = get_text_embedding(best_entry["canonicalSummary"])
+            if updated_emb is not None:
+                best_entry["embedding_vec"] = updated_emb
             return "update", catalyst_id, new_facts
         else:
             # Suppress as duplicate, but log the article reference

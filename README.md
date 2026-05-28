@@ -79,7 +79,7 @@ The application uses up to four external API keys. **All are optional** — see 
 
 ### `GEMINI_API_KEY` — Google Gemini (default LLM)
 
-Used for: canonical event extraction (`gemini-2.5-flash`) and per-ticker synthesis (`gemini-2.5-flash`), plus embeddings for the deduplication ledger (`models/embedding-001`, 768 dimensions).
+Used for: canonical event extraction (`gemini-2.5-flash`) and per-ticker synthesis (`gemini-2.5-flash`). The deduplication ledger does **not** use this key — it embeds locally (see [Catalyst dedup embeddings](#catalyst-dedup-embeddings-local-no-api-key) below).
 
 **How to get it:**
 1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey).
@@ -92,7 +92,7 @@ The free tier is sufficient for all replay scenarios.
 
 ### `OPENAI_API_KEY` — OpenAI (alternative LLM)
 
-Used for: canonical event extraction (`gpt-4.1-nano`) and per-ticker synthesis (`gpt-4o-mini`), plus embeddings (`text-embedding-3-small`, 1536 dimensions).
+Used for: canonical event extraction (`gpt-4.1-nano`) and per-ticker synthesis (`gpt-4o-mini`). The deduplication ledger does **not** use this key — it embeds locally (see [Catalyst dedup embeddings](#catalyst-dedup-embeddings-local-no-api-key) below).
 
 Set `LLM_PROVIDER=openai` in your `.env` to activate this path. If both keys are set, `LLM_PROVIDER` controls which one is used. If `GEMINI_API_KEY` is absent but `OPENAI_API_KEY` is present, the app automatically falls back to OpenAI regardless of `LLM_PROVIDER`.
 
@@ -102,6 +102,17 @@ Set `LLM_PROVIDER=openai` in your `.env` to activate this path. If both keys are
 3. Copy the value — it is only shown once.
 
 You need a funded account (pay-as-you-go). Running all three replay scenarios costs well under $0.10.
+
+---
+
+### Catalyst dedup embeddings (local, no API key)
+
+The catalyst-memory ledger decides whether a fresh event is a duplicate, an update, or a new story. This is done with a **local embedding model** — there is no embedding API key and no per-call cost.
+
+- **Primary:** [`fastembed`](https://github.com/qdrant/fastembed) running `BAAI/bge-small-en-v1.5` (384 dimensions, ONNX, CPU). The model downloads once (~50 MB) on first run, then runs fully offline. Override with the `EMBEDDING_MODEL` env var.
+- **Fallback:** if the model cannot be loaded, the system automatically uses a deterministic lexical token-frequency cosine matcher (no extra dependencies). Recall on heavily paraphrased duplicates is lower, but it is fully deterministic. The UI memory panel shows which engine is active.
+
+This replaced the earlier remote embedding API (`models/embedding-001` / `text-embedding-3-small`), which charged per call and was the main recurring cost in the dedup path.
 
 ---
 
@@ -316,9 +327,10 @@ All variables go in `backend/.env`. Copy `backend/.env.example` as a starting po
 
 | Variable | Default | Required | Description |
 |----------|---------|----------|-------------|
-| `GEMINI_API_KEY` | _(empty)_ | No | Google Gemini API key. Used for LLM extraction, synthesis, and embeddings. Either this or `OPENAI_API_KEY` needed for real LLM output. |
+| `GEMINI_API_KEY` | _(empty)_ | No | Google Gemini API key. Used for LLM extraction and synthesis (not embeddings — dedup embeds locally). Either this or `OPENAI_API_KEY` needed for real LLM output. |
 | `OPENAI_API_KEY` | _(empty)_ | No | OpenAI API key. Alternative to Gemini. Set `LLM_PROVIDER=openai` to activate. |
 | `LLM_PROVIDER` | `gemini` | No | `"gemini"` or `"openai"`. Selects which provider's models are used when both keys are set. |
+| `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | No | Local fastembed model used for catalyst dedup. Runs offline on CPU at $0/call; downloads once (~50 MB). Lexical cosine fallback if it cannot load. |
 | `FINNHUB_API_KEY` | _(empty)_ | No | Finnhub key for live company-specific news. Only used with `scenario_id=live`. |
 | `CURRENTS_API_KEY` | _(empty)_ | No | Currents API key for live cross-impact news. Only used with `scenario_id=live` and Iteration 3. |
 | `PHOENIX_PORT` | `6006` | No | Port for the Arize Phoenix tracing dashboard. |
@@ -337,7 +349,7 @@ problem-first-AI-capstone-team13/
 │   ├── graph.py              # LangGraph 6-node workflow definition
 │   ├── ingestion.py          # Finnhub/Currents API clients + scenario replay
 │   ├── routing.py            # Exposure graph state + path traversal + scoring
-│   ├── memory.py             # In-memory catalyst ledger + embedding engine
+│   ├── memory.py             # In-memory catalyst ledger + local embedding/lexical dedup engine
 │   ├── seed_data.py          # Seeded exposure graph and replay scenario articles
 │   ├── persistence.py        # JSON file persistence helpers (not yet wired up)
 │   ├── run_tests.py          # Unit test suite (3 end-to-end workflow tests)
