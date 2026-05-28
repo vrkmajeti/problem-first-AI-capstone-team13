@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+langgraph
+langchain-core
+langchain-google-genai
+langchain-openai
+arize-phoenix
+openinference-instrumentation-langchain
+requests
+python-dotenv
+pydantic
+numpy
