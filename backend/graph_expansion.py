@@ -1,19 +1,25 @@
 """
 Exposure-graph expansion.
 
-Runs ONCE when a new ticker is added to the watchlist. It uses an LLM to discover
-the causal exposure surrounding the ticker (suppliers, partners, regions, technology
+When a ticker is added to the watchlist, the add itself is NOT blocked: the LLM-driven
+expansion runs afterwards as a background task. It discovers the causal exposure
+surrounding the ticker (suppliers, customers, competitors, partners, regions, technology
 themes, macro/commodity risk factors, shipping routes) and merges the resulting nodes
-and edges into the live exposure graph. It is NOT re-run on pipeline refreshes.
+and edges into the live exposure graph. Per-ticker progress is tracked in an in-memory
+status store so the UI can show a pending/ready/failed state and offer a manual re-run.
+It is NOT re-run on pipeline refreshes.
 """
 import json
 from datetime import datetime, timezone
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Literal, Optional
 
+from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.config import GEMINI_API_KEY, OPENAI_API_KEY, get_llm
+from backend.graph import invoke_with_retry
 from backend.routing import get_graph, add_graph_node, add_graph_edge
+from backend.persistence import save_graph
 
 
 # Node/edge vocabulary mirrors backend/seed_data.py so generated graph elements are
@@ -31,6 +37,9 @@ VALID_NODE_TYPES = {
 
 VALID_EDGE_TYPES = {
     "supplier_of",
+    "customer_of",
+    "competitor_of",
+    "partner_of",
     "technology_exposure",
     "regional_exposure",
     "shipping_exposure",
@@ -44,16 +53,69 @@ class GraphExpansionError(Exception):
     """Raised when a configured LLM fails to produce a usable expansion."""
 
 
-def _clean_json_string(text: str) -> str:
-    """Strips markdown JSON code fences from LLM output if present."""
-    text = text.strip()
-    if text.startswith("```json"):
-        text = text[7:]
-    elif text.startswith("```"):
-        text = text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
-    return text.strip()
+# Structured-output schemas (constrained decoding). Binding these via
+# `.with_structured_output(...)` guarantees the model emits schema-valid JSON, so a
+# missing delimiter can never sink an expansion. The referential-integrity checks
+# below (edges must point at known nodeIds) still run — structured outputs enforces
+# SHAPE, not whether a generated nodeId actually exists in the graph.
+NodeTypeLiteral = Literal[
+    "ticker", "private_company", "region", "technology_theme",
+    "shipping_route", "risk_factor", "sector", "commodity",
+]
+EdgeTypeLiteral = Literal[
+    "supplier_of", "customer_of", "competitor_of", "partner_of",
+    "technology_exposure", "regional_exposure", "shipping_exposure",
+    "macro_sensitivity", "sector_exposure", "commodity_exposure",
+]
+
+
+class ExpansionNode(BaseModel):
+    nodeId: str
+    nodeType: NodeTypeLiteral
+    name: str
+    aliases: List[str]
+    queryTerms: List[str]
+
+
+class ExpansionEdge(BaseModel):
+    fromNodeId: str
+    toNodeId: str
+    edgeType: EdgeTypeLiteral
+    strength: Literal["high", "medium", "low"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    notes: str
+
+
+class GraphExpansionResult(BaseModel):
+    nodes: List[ExpansionNode]
+    edges: List[ExpansionEdge]
+
+
+# ---------------------------------------------------------------------------
+# Per-ticker expansion status store (in-memory; drives the UI pending indicator)
+# ---------------------------------------------------------------------------
+# status: "pending" (queued) | "running" | "done" | "skipped" | "failed"
+_expansion_status: Dict[str, Dict[str, Any]] = {}
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _set_status(ticker: str, status: str, **extra: Any) -> None:
+    entry = {"ticker": ticker, "status": status, "updatedAt": _now_iso()}
+    entry.update(extra)
+    _expansion_status[ticker] = entry
+
+
+def get_expansion_status() -> Dict[str, Dict[str, Any]]:
+    """Returns the full per-ticker expansion status map."""
+    return _expansion_status
+
+
+def mark_pending(ticker: str) -> None:
+    """Marks a ticker as queued for expansion (called before scheduling the task)."""
+    _set_status(ticker.strip().upper(), "pending")
 
 
 def _today() -> str:
@@ -61,8 +123,8 @@ def _today() -> str:
 
 
 SYSTEM_PROMPT = """You are a financial exposure-graph architect. A new stock ticker has just been added to an intraday trading watchlist.
-Your job is to map the causal exposure surrounding this ticker so a news system can route INDIRECT news \
-(supply-chain disruptions, geopolitics, technology themes, macro shocks, commodities, key partners) to this ticker.
+Your job is to map the causal exposure surrounding this ticker COMPREHENSIVELY, so a news system can route INDIRECT news \
+(supply-chain disruptions, geopolitics, technology themes, macro shocks, commodities, competitors, key partners) to this ticker.
 
 You will be given:
 - The new ticker symbol.
@@ -92,7 +154,7 @@ For each relevant exposure entity that is NOT already in the graph, add a node:
 {
   "fromNodeId": "<source nodeId — a new node OR an existing nodeId from the provided list>",
   "toNodeId": "ticker_<SYMBOL>  (or another node when modelling an intermediate hop)",
-  "edgeType": "supplier_of" | "technology_exposure" | "regional_exposure" | "shipping_exposure" | "macro_sensitivity" | "sector_exposure" | "commodity_exposure",
+  "edgeType": "supplier_of" | "customer_of" | "competitor_of" | "partner_of" | "technology_exposure" | "regional_exposure" | "shipping_exposure" | "macro_sensitivity" | "sector_exposure" | "commodity_exposure",
   "strength": "high" | "medium" | "low",
   "confidence": 0.0-1.0,
   "notes": "one sentence explaining the causal relationship"
@@ -100,11 +162,11 @@ For each relevant exposure entity that is NOT already in the graph, add a node:
 
 Rules:
 1. REUSE existing nodes: if an exposure entity already exists in the provided node list (e.g. theme_semiconductors, region_Taiwan, ticker_TSM), reference its EXACT existing nodeId in edges — do NOT create a duplicate node.
-2. Produce 3-8 strong, decision-relevant exposure links for intraday trading — not an exhaustive list.
-3. Use only REAL, well-known suppliers, partners, regions, and themes. Do NOT invent companies.
-4. confidence reflects how directly the source moves this ticker intraday (0.9+ = near-certain causal link, 0.5 = plausible/marginal).
-5. Every edge's fromNodeId and toNodeId must be either the new ticker node, one of your new nodes, or an existing nodeId from the provided list.
-6. Output ONLY valid JSON. No markdown, no commentary.
+2. Be COMPREHENSIVE, not conservative. Produce roughly 8-15 exposure links covering the full surface: key SUPPLIERS, major CUSTOMERS, direct COMPETITORS, strategic PARTNERS, regions of operation/revenue concentration, relevant technology themes, input COMMODITIES, macro/rate/fuel sensitivities, and shipping/logistics routes where they genuinely apply. Include both strong and plausible-but-secondary links (use confidence to grade them) — a sparse graph misses cross-impact news.
+3. CONNECT TO OTHER WATCHLIST TICKERS when a real relationship exists: if an existing ticker_* node is a supplier, customer, or competitor of the new ticker, add that edge (e.g. competitor_of between two chipmakers, supplier_of from a foundry ticker to a fabless ticker).
+4. Use only REAL, well-known entities. Do NOT invent companies.
+5. confidence reflects how directly the source moves this ticker intraday (0.9+ = near-certain causal link, 0.6 = relevant, 0.45 = plausible/marginal). Do not omit a real link just because it is secondary — grade it with a lower confidence instead.
+6. Every edge's fromNodeId and toNodeId must be either the new ticker node, one of your new nodes, or an existing nodeId from the provided list.
 """
 
 
@@ -118,17 +180,19 @@ def _bare_ticker_node(ticker: str) -> Dict[str, Any]:
     }
 
 
-def expand_graph_for_ticker(ticker: str) -> Dict[str, Any]:
+def expand_graph_for_ticker(ticker: str, force: bool = False) -> Dict[str, Any]:
     """
-    Discovers and merges exposure-graph nodes/edges for a newly added ticker.
+    Discovers and merges exposure-graph nodes/edges for a ticker.
 
     Behaviour:
-      - If the ticker node already exists, this is a no-op (expansion runs once per ticker).
+      - If the ticker node already exists and ``force`` is False, this is a no-op
+        (automatic expansion runs once per ticker).
+      - With ``force=True`` (manual re-run), it re-queries the LLM and merges again,
+        enriching the existing subgraph (merges are idempotent by nodeId / edge pair).
       - With no LLM keys configured (demo/mock mode), adds only the bare ticker node.
-      - With a configured LLM, merges the LLM-generated subgraph. Raises GraphExpansionError
-        if the LLM call fails or returns unusable output (caller should reject the change).
+      - Raises GraphExpansionError if a configured LLM call fails or returns unusable output.
 
-    Returns a summary dict.
+    Returns a summary dict. Does NOT persist or update status — see process_ticker_expansion.
     """
     ticker = ticker.strip().upper()
     if not ticker:
@@ -136,9 +200,10 @@ def expand_graph_for_ticker(ticker: str) -> Dict[str, Any]:
 
     ticker_node_id = f"ticker_{ticker}"
     existing_nodes = get_graph()["nodes"]
+    already_present = any(n["nodeId"] == ticker_node_id for n in existing_nodes)
 
-    # Expansion is once-per-ticker: if the node is already present, do nothing.
-    if any(n["nodeId"] == ticker_node_id for n in existing_nodes):
+    # Automatic expansion is once-per-ticker. A manual re-run (force=True) bypasses this.
+    if already_present and not force:
         print(f"[graph_expansion] {ticker} already in graph — skipping expansion.")
         return {"ticker": ticker, "addedNodes": 0, "addedEdges": 0, "usedLLM": False, "skipped": True}
 
@@ -162,22 +227,18 @@ def expand_graph_for_ticker(ticker: str) -> Dict[str, Any]:
     )
 
     try:
-        llm = get_llm()
-        response = llm.invoke([
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=user_prompt),
-        ])
-        payload = json.loads(_clean_json_string(response.content))
+        llm = get_llm().with_structured_output(GraphExpansionResult)
+        result: GraphExpansionResult = invoke_with_retry(
+            llm,
+            [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_prompt)],
+            label=f"graph expansion for {ticker}",
+        )
+        payload = result.model_dump()
     except Exception as e:
         raise GraphExpansionError(f"LLM expansion failed for {ticker}: {e}") from e
 
-    if not isinstance(payload, dict):
-        raise GraphExpansionError(f"LLM returned non-object payload for {ticker}.")
-
-    raw_nodes = payload.get("nodes", [])
-    raw_edges = payload.get("edges", [])
-    if not isinstance(raw_nodes, list) or not isinstance(raw_edges, list):
-        raise GraphExpansionError(f"LLM payload missing valid 'nodes'/'edges' lists for {ticker}.")
+    raw_nodes = payload["nodes"]
+    raw_edges = payload["edges"]
 
     # --- Validate & collect new nodes ---
     clean_nodes: List[Dict[str, Any]] = []
@@ -253,3 +314,29 @@ def expand_graph_for_ticker(ticker: str) -> Dict[str, Any]:
         "addedEdges": len(clean_edges),
         "usedLLM": True,
     }
+
+
+def process_ticker_expansion(ticker: str, force: bool = False) -> Dict[str, Any]:
+    """
+    Background-task entrypoint. Runs the expansion, persists the graph on success, and
+    records the outcome in the status store. Never raises — failures are surfaced via
+    the status entry so the UI can offer a manual re-run.
+    """
+    ticker = ticker.strip().upper()
+    _set_status(ticker, "running")
+    try:
+        summary = expand_graph_for_ticker(ticker, force=force)
+        save_graph(get_graph())
+        final_status = "skipped" if summary.get("skipped") else "done"
+        _set_status(
+            ticker,
+            final_status,
+            addedNodes=summary.get("addedNodes", 0),
+            addedEdges=summary.get("addedEdges", 0),
+            usedLLM=summary.get("usedLLM", False),
+        )
+        return summary
+    except Exception as e:
+        print(f"[graph_expansion] Background expansion failed for {ticker}: {e}")
+        _set_status(ticker, "failed", error=str(e))
+        return {"ticker": ticker, "status": "failed", "error": str(e)}

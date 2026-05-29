@@ -1,12 +1,73 @@
 import json
 import re
-from typing import TypedDict, List, Dict, Any, Tuple
+from typing import TypedDict, List, Dict, Any, Tuple, Literal
+from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
 from backend.config import get_llm, get_llm_fast, FRESHNESS_LOOKBACK_MINUTES
 from backend.ingestion import get_news_payload
 from backend.routing import get_cross_impact_keywords, route_cross_impact
 from backend.memory import check_ledger_decision
+
+# ---------------------------------------------------------------------------
+# Structured-output schemas (constrained decoding).
+#
+# These are the contracts we bind to the LLM via `.with_structured_output(...)`.
+# The provider's decoder is grammar-constrained to these schemas, so the model
+# CANNOT emit syntactically-invalid JSON or off-schema fields — eliminating the
+# malformed-JSON failure mode at the source rather than repairing it after.
+# ---------------------------------------------------------------------------
+
+EventType = Literal[
+    "earnings", "guidance", "supply_chain", "regulatory", "legal", "macro",
+    "geopolitical", "commodity", "sector", "private_company_technology",
+    "natural_disaster", "other",
+]
+DirectionalPressure = Literal["positive", "negative", "mixed", "unclear"]
+ConfidenceLevel = Literal["low", "medium", "high", "tentative"]
+
+
+class CanonicalEventOut(BaseModel):
+    """One extracted catalyst event (Node 2 output, per article)."""
+    articleId: str = Field(description="The exact articleId of the source article")
+    eventType: EventType
+    eventSummary: str = Field(description="One sentence summarizing the key catalyst event")
+    hardFacts: List[str] = Field(description="Grounded facts, numbers, dates mentioned in the text")
+    entities: List[str] = Field(description="Companies, products, routes, places, or platforms involved")
+    eventTags: List[str] = Field(description="Normalized keywords useful for graph matching")
+    regions: List[str] = Field(description="Countries or regions affected")
+    sectors: List[str] = Field(description="Economic sectors affected")
+    commodities: List[str] = Field(description="Commodities affected")
+    technologyThemes: List[str] = Field(description="Specific technology sub-themes, if any")
+    possibleDirectionalPressure: DirectionalPressure = Field(description="Short-term intraday influence")
+    uncertaintyNotes: List[str] = Field(description="Key uncertainties remaining from this article")
+    evidence: List[str] = Field(description="Verbatim phrases from the article proving the hard facts")
+
+
+class ExtractionResult(BaseModel):
+    """Top-level wrapper — structured outputs require an object root, not a bare array."""
+    events: List[CanonicalEventOut]
+
+
+class MainCatalystOut(BaseModel):
+    label: str = Field(description="Short catalyst title")
+    relationshipType: Literal["direct", "indirect"]
+    eventType: str
+    possibleInfluence: DirectionalPressure
+    confidence: ConfidenceLevel
+    recency: Literal["breaking", "recent", "background"]
+    impactPath: List[str] = Field(description="Ordered list of nodes describing the impact path")
+
+
+class SynthesisOut(BaseModel):
+    """Per-ticker catalyst briefing (Node 5 output)."""
+    summaryHeadline: str
+    situationSummary: str
+    mainCatalysts: List[MainCatalystOut]
+    overallPossibleInfluence: DirectionalPressure
+    confidence: ConfidenceLevel
+    uncertainties: List[str]
+    watchItems: List[str]
 
 # Define LangGraph State
 class WorkflowState(TypedDict):
@@ -22,6 +83,7 @@ class WorkflowState(TypedDict):
     duplicate_counts: Dict[str, int]
     ingestion_metadata: Dict[str, Any]
     llm_failed: bool  # Sentinel: set True if a critical LLM node fails; halts downstream LLM calls
+    failure_reason: str  # Human-readable cause when llm_failed is True (distinguishes outage vs. bad output)
 
 def clean_json_string(text: str) -> str:
     """Cleans markdown JSON code blocks from LLM output if present."""
@@ -33,6 +95,34 @@ def clean_json_string(text: str) -> str:
     if text.endswith("```"):
         text = text[:-3]
     return text.strip()
+
+def classify_llm_failure(e: Exception, model_label: str) -> str:
+    """Turn an LLM-node exception into an accurate, user-facing failure reason.
+
+    Distinguishes a genuine availability problem (the call never produced a valid
+    response — rate limit, quota, auth, connectivity) from a content problem (the
+    model responded but its output did not satisfy the required schema). Conflating
+    these is exactly the bug that made a parse error read as 'rate-limited'.
+    """
+    from pydantic import ValidationError
+    name = type(e).__name__
+    if isinstance(e, (ValidationError, ValueError)) or "OutputParser" in name:
+        return f"The {model_label} returned output that did not match the required schema: {e}"
+    return (f"The {model_label} could not be reached "
+            f"(possible rate limit, quota, or connectivity issue): {e}")
+
+def invoke_with_retry(runnable, messages, label="LLM call"):
+    """Invoke a runnable, retrying exactly once on failure.
+
+    The expensive nodes make a single batched call by design (efficiency). A retry
+    covers a transient hiccup (rate-limit blip, timeout) without un-batching. If the
+    second attempt also fails, the exception propagates to the caller's classifier.
+    """
+    try:
+        return runnable.invoke(messages)
+    except Exception as e:
+        print(f"  [retry] {label} failed ({e}); retrying once...")
+        return runnable.invoke(messages)
 
 # 1. Fetch & Filter Node
 def fetch_and_filter_node(state: WorkflowState) -> Dict[str, Any]:
@@ -230,34 +320,20 @@ def canonical_event_extraction_node(state: WorkflowState) -> Dict[str, Any]:
 
     llm = get_llm_fast()
     
-    # System instructions for batch canonical extraction
-    system_prompt = """You are an expert financial news analyst. Your task is to analyze a list of news articles and extract a canonical structured event representation for each relevant article.
+    # System instructions for batch canonical extraction.
+    # The output SHAPE is enforced by structured outputs (ExtractionResult schema),
+    # so the prompt only needs the semantic rules — not a JSON schema dump.
+    system_prompt = """You are an expert financial news analyst. Your task is to analyze a list of news articles and extract a canonical structured event for each relevant article, returned under the "events" field.
 
-You must return a valid JSON list of objects matching this schema exactly:
-[
-  {
-    "articleId": "string (the exact articleId of the source article)",
-    "eventType": "earnings" | "guidance" | "supply_chain" | "regulatory" | "legal" | "macro" | "geopolitical" | "commodity" | "sector" | "private_company_technology" | "natural_disaster" | "other",
-    "eventSummary": "one sentence summarizing the key catalyst event",
-    "hardFacts": ["grounded list of facts, numbers, dates, or details mentioned in the text"],
-    "entities": ["list of companies, products, routes, places, or platforms involved"],
-    "eventTags": ["normalized keywords useful for graph matching (e.g. Taiwan, shipping, semiconductor, model release)"],
-    "regions": ["countries or regions affected (e.g. Taiwan, China, Red Sea)"],
-    "sectors": ["economic sectors (e.g. technology, airlines, shipping)"],
-    "commodities": ["commodities affected (e.g. oil, silicon, microchips)"],
-    "technologyThemes": ["specific technology sub-themes if any (e.g. frontier AI, lithography)"],
-    "possibleDirectionalPressure": "positive" | "negative" | "mixed" | "unclear",
-    "uncertaintyNotes": ["what key uncertainties remain from this article"],
-    "evidence": ["verbatim phrases from the article proving the hard facts"]
-  }
-]
+Field guidance:
+- eventTags: normalized keywords useful for graph matching (e.g. Taiwan, shipping, semiconductor, model release).
+- evidence: verbatim phrases copied from the article proving the hard facts.
 
 Strict Rules:
-1. For each article in the input list, extract the corresponding event structure. If an article is completely irrelevant or noise, you may omit it or map it as eventType "other".
+1. For each article in the input list, extract the corresponding event. If an article is completely irrelevant or noise, you may omit it or map it as eventType "other".
 2. Do NOT invent or extrapolate facts. Extract only what is written in the article text.
 3. The possibleDirectionalPressure must reflect short-term intraday influence.
 4. Do NOT provide buy or sell advice.
-5. Output ONLY valid JSON array, do not wrap in markdown or prefix/suffix.
 """
 
     # Reference time for computing article age
@@ -297,23 +373,20 @@ SUMMARY: {summary}
 RELATED TICKERS IN SOURCE: {', '.join(art.get('relatedTickers', []))}
 \n"""
 
+    # The API call. A failure here means the LLM is genuinely unavailable
+    # (network error, auth, rate limit / quota). With structured outputs the decoder
+    # is grammar-constrained to ExtractionResult, so we get a validated object back
+    # and there is no separate JSON-parsing failure mode to misclassify as an outage.
     try:
         print(f"Calling LLM to extract events from {len(articles)} articles in one batch...")
-        response = llm.invoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_content)
-        ])
-        cleaned = clean_json_string(response.content)
-        extracted_events = json.loads(cleaned)
-        
-        # Ensure it is a list
-        if not isinstance(extracted_events, list):
-            # If the LLM returned a single dict, wrap it
-            if isinstance(extracted_events, dict):
-                extracted_events = [extracted_events]
-            else:
-                extracted_events = []
-                
+        structured_llm = llm.with_structured_output(ExtractionResult)
+        result: ExtractionResult = invoke_with_retry(
+            structured_llm,
+            [SystemMessage(content=system_prompt), HumanMessage(content=user_content)],
+            label="batch event extraction",
+        )
+        extracted_events = [ev.model_dump() for ev in result.events]
+
         # Create map of articles by ID for easy lookup
         art_map = {art["articleId"]: art for art in articles}
         
@@ -336,13 +409,18 @@ RELATED TICKERS IN SOURCE: {', '.join(art.get('relatedTickers', []))}
                 print(f"Warning: Extracted event references unknown articleId: {art_id}")
                 
     except Exception as e:
-        print(f"Error in batch canonical event extraction: {e}")
-        # Signal downstream nodes that LLM is unavailable — do NOT silently continue with
-        # garbage rule-based events that will pollute the ledger and synthesis.
-        print("LLM unavailable in Node 2. Setting llm_failed=True to halt downstream LLM steps.")
-        return {"canonical_events": [], "llm_failed": True}
-            
-    return {"canonical_events": canonical_events, "llm_failed": False}
+        # Halt downstream LLM steps (to avoid polluting the ledger) and report the REAL
+        # cause — an outage vs. a content/schema problem are reported differently.
+        reason = classify_llm_failure(e, "news-analysis model")
+        print(f"Node 2 event extraction failed: {e}")
+        print("Setting llm_failed=True to halt downstream LLM steps.")
+        return {
+            "canonical_events": [],
+            "llm_failed": True,
+            "failure_reason": reason,
+        }
+
+    return {"canonical_events": canonical_events, "llm_failed": False, "failure_reason": ""}
 
 # 3. Routing Node
 def routing_node(state: WorkflowState) -> Dict[str, Any]:
@@ -427,18 +505,19 @@ def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
     if state.get("llm_failed", False):
         print("Skipping synthesis: upstream LLM failure detected (llm_failed=True).")
         watchlist = state.get("watchlist", [])
+        reason = state.get("failure_reason") or "The model could not be reached during event extraction."
         empty_syntheses = {}
         for ticker in watchlist:
             empty_syntheses[ticker] = {
                 "summaryId": f"sum_halted_{ticker}",
                 "ticker": ticker,
-                "summaryHeadline": "Pipeline halted — LLM unavailable",
-                "situationSummary": "The LLM was rate-limited or unavailable during event extraction. No synthesis was produced. Please retry after the quota resets or switch to a paid API tier.",
+                "summaryHeadline": "Pipeline halted — event extraction failed",
+                "situationSummary": f"No synthesis was produced. {reason}",
                 "mainCatalysts": [],
                 "overallPossibleInfluence": "unclear",
                 "confidence": "low",
-                "uncertainties": ["LLM quota exhausted."],
-                "watchItems": ["Retry after quota reset."],
+                "uncertainties": [reason],
+                "watchItems": ["Re-run the pipeline; if the failure persists, check the backend logs for the underlying cause."],
                 "sourceEventIds": [],
                 "sourceArticleUrls": [],
                 "notFinancialAdvice": True
@@ -617,26 +696,11 @@ RECENCY RULE: Weight events published more recently (lower minutesAgo) more heav
 For intraday trading, events < 30 minutes old are HIGH priority. Events 30-90 minutes old are MEDIUM priority.
 Events > 90 minutes old are BACKGROUND context — still relevant but should not dominate the headline.
 
-You must output a JSON object matching this schema exactly:
-{
-  "summaryHeadline": "one concise headline summarizing the net catalyst situation",
-  "situationSummary": "paragraph explanation of what has happened, referencing direct and indirect paths, and explicitly noting which catalysts are breaking vs. background",
-  "mainCatalysts": [
-    {
-      "label": "short catalyst title",
-      "relationshipType": "direct" | "indirect",
-      "eventType": "event type string",
-      "possibleInfluence": "positive" | "negative" | "mixed" | "unclear",
-      "confidence": "low" | "medium" | "high" | "tentative",
-      "recency": "breaking" | "recent" | "background",
-      "impactPath": ["list", "of", "nodes"]
-    }
-  ],
-  "overallPossibleInfluence": "positive" | "negative" | "mixed" | "unclear",
-  "confidence": "low" | "medium" | "high" | "tentative",
-  "uncertainties": ["specific uncertainties or unknowns for the trader to monitor"],
-  "watchItems": ["specific ticker signals, announcements, or price markers to watch next"]
-}
+Field guidance (the output shape itself is enforced for you):
+- summaryHeadline: one concise headline summarizing the net catalyst situation.
+- situationSummary: a paragraph explaining what happened, referencing direct and indirect paths, and explicitly noting which catalysts are breaking vs. background.
+- mainCatalysts[].impactPath: the ordered chain of nodes describing how the event reaches the ticker.
+- uncertainties / watchItems: specific signals, announcements, or price markers for the trader to monitor next.
 
 Cross-impact path strength:
 Each cross-impact event includes a "pathStrength" field indicating routing confidence:
@@ -654,7 +718,6 @@ Strict Rules:
    - mainCatalysts: []
 3. Use tentative, risk-aware language. Never state market movements as guarantees. Use terms like "possible pressure", "potential risk", "tentative impact".
 4. Do NOT give investment or trading advice. Do NOT write "buy", "sell", "we recommend shorting".
-5. Output ONLY valid JSON without markdown wrapping.
 """
 
     ref_time = datetime_now()
@@ -709,13 +772,14 @@ Strict Rules:
         user_prompt = f"TICKER CONFIG: {ticker}\nCONTEXT BUCKET:\n{context_str}"
         
         try:
-            response = llm.invoke([
-                SystemMessage(content=synthesis_system_prompt),
-                HumanMessage(content=user_prompt)
-            ])
-            cleaned = clean_json_string(response.content)
-            synthesis = json.loads(cleaned)
-            
+            structured_llm = llm.with_structured_output(SynthesisOut)
+            result: SynthesisOut = invoke_with_retry(
+                structured_llm,
+                [SystemMessage(content=synthesis_system_prompt), HumanMessage(content=user_prompt)],
+                label=f"synthesis for {ticker}",
+            )
+            synthesis = result.model_dump()
+
             # Map additional metadata
             synthesis["summaryId"] = f"sum_{ticker}_{int(datetime_now().timestamp())}"
             synthesis["ticker"] = ticker
@@ -741,12 +805,13 @@ Strict Rules:
             
             ticker_syntheses[ticker] = synthesis
         except Exception as e:
+            reason = classify_llm_failure(e, "synthesis model")
             print(f"Error synthesizing briefing for {ticker}: {e}")
             ticker_syntheses[ticker] = {
                 "summaryId": f"sum_error_{ticker}",
                 "ticker": ticker,
                 "summaryHeadline": "Error in catalyst synthesis",
-                "situationSummary": f"A processing error occurred during LLM briefing synthesis: {str(e)}",
+                "situationSummary": f"No briefing was produced for {ticker}. {reason}",
                 "mainCatalysts": [],
                 "overallPossibleInfluence": "unclear",
                 "confidence": "low",

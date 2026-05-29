@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "Backend: FastAPI Server",
-      "type": "python",
+      "type": "debugpy",
       "request": "launch",
       "module": "backend.main",
       "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
@@ -16,7 +16,7 @@
     },
     {
       "name": "Backend: Run Unit Tests",
-      "type": "python",
+      "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/backend/run_tests.py",
       "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
@@ -38,7 +38,7 @@
     },
     {
       "name": "Tracing: Arize Phoenix Server",
-      "type": "python",
+      "type": "debugpy",
       "request": "launch",
       "module": "phoenix.server.main",
       "args": ["serve"],

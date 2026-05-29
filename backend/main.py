@@ -1,18 +1,21 @@
-import copy
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 
 from backend.config import init_phoenix, PHOENIX_PORT
-from backend.routing import get_graph, add_graph_node, add_graph_edge, set_graph
+from backend.routing import get_graph, add_graph_node, add_graph_edge, set_graph, reset_graph
 from backend.memory import get_ledger, clear_ledger
 import backend.memory as _memory_module
 from backend.config import GEMINI_API_KEY, OPENAI_API_KEY, LLM_PROVIDER
 from backend.graph import build_workflow_graph
 from backend.persistence import load_watchlist, save_watchlist, load_graph, save_graph
-from backend.graph_expansion import expand_graph_for_ticker, GraphExpansionError
+from backend.graph_expansion import (
+    process_ticker_expansion,
+    mark_pending,
+    get_expansion_status,
+)
 
 app = FastAPI(title="Intraday Cross-Impact Catalyst Briefings API")
 
@@ -39,6 +42,13 @@ class RunRequest(BaseModel):
 class WatchlistRequest(BaseModel):
     tickers: List[str]
 
+class ExpandRequest(BaseModel):
+    ticker: str
+    force: bool = True  # manual triggers default to re-running even if the node exists
+
+class RebuildRequest(BaseModel):
+    reset: bool = True  # True = reset to curated seed first; False = additive refresh on top
+
 @app.on_event("startup")
 def startup_event():
     global _watchlist
@@ -51,37 +61,60 @@ def get_watchlist():
     return {"tickers": _watchlist}
 
 @app.post("/api/watchlist")
-def update_watchlist(req: WatchlistRequest):
+def update_watchlist(req: WatchlistRequest, background_tasks: BackgroundTasks):
     global _watchlist
     previous_watchlist = list(_watchlist)
 
-    # Newly added tickers trigger a ONE-TIME exposure-graph expansion. Removals are
-    # left in the graph so cross-impact knowledge accumulates over time.
+    # Newly added tickers trigger a ONE-TIME exposure-graph expansion. The add itself
+    # is NOT blocked by the LLM: we commit the watchlist immediately and run expansion
+    # as a background task. Removals are left in the graph so knowledge accumulates.
     new_tickers = [t for t in req.tickers if t not in previous_watchlist]
-
-    # Snapshot the live graph so a mid-batch failure restores its exact prior state.
-    graph_snapshot = copy.deepcopy(get_graph())
-
-    # Run graph expansion BEFORE committing the watchlist so a configured-LLM failure
-    # rejects the whole change and leaves both watchlist and graph untouched.
-    expansions = []
-    for ticker in new_tickers:
-        try:
-            expansions.append(expand_graph_for_ticker(ticker))
-        except GraphExpansionError as e:
-            # Roll back any nodes/edges added for earlier tickers in this same request.
-            set_graph(graph_snapshot)
-            raise HTTPException(
-                status_code=502,
-                detail=f"Watchlist update rejected: exposure-graph expansion failed for {ticker}. {e}",
-            )
 
     _watchlist = req.tickers
     save_watchlist(_watchlist)
-    if new_tickers:
-        save_graph(get_graph())
 
-    return {"tickers": _watchlist, "graphExpansions": expansions}
+    # Queue expansion for each new ticker. mark_pending() flips the status before the
+    # task runs so the UI shows "pending" the instant the add returns.
+    for ticker in new_tickers:
+        mark_pending(ticker)
+        background_tasks.add_task(process_ticker_expansion, ticker, False)
+
+    return {"tickers": _watchlist, "expansionStatus": get_expansion_status()}
+
+@app.get("/api/graph/status")
+def graph_expansion_status():
+    """Per-ticker exposure-graph expansion status (pending/running/done/skipped/failed)."""
+    return {"status": get_expansion_status()}
+
+@app.post("/api/graph/expand")
+def trigger_graph_expansion(req: ExpandRequest, background_tasks: BackgroundTasks):
+    """Manually (re-)run the exposure-graph expansion for a ticker, in the background."""
+    ticker = req.ticker.strip().upper()
+    if not ticker:
+        raise HTTPException(status_code=400, detail="ticker is required")
+    mark_pending(ticker)
+    background_tasks.add_task(process_ticker_expansion, ticker, req.force)
+    return {"status": "scheduled", "ticker": ticker, "expansionStatus": get_expansion_status()}
+
+@app.post("/api/graph/rebuild")
+def rebuild_graph_endpoint(req: RebuildRequest, background_tasks: BackgroundTasks):
+    """
+    Rebuild the exposure graph for the ENTIRE watchlist in the background.
+      - reset=True  : restore the curated seed graph (drop accumulated LLM additions), then re-expand every ticker.
+      - reset=False : keep the current graph and force a fresh expansion for every ticker on top of it.
+    """
+    if req.reset:
+        reset_graph()
+        save_graph(get_graph())
+    for ticker in _watchlist:
+        mark_pending(ticker)
+        background_tasks.add_task(process_ticker_expansion, ticker, True)
+    return {
+        "status": "scheduled",
+        "reset": req.reset,
+        "tickers": _watchlist,
+        "expansionStatus": get_expansion_status(),
+    }
 
 @app.get("/api/graph")
 def get_exposure_graph():

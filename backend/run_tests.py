@@ -1,16 +1,9 @@
 import unittest
 from unittest.mock import patch, MagicMock
-import json
-from datetime import datetime, timezone
 
-from backend.graph import build_workflow_graph, clean_json_string
+from backend.graph import build_workflow_graph, ExtractionResult, SynthesisOut
 from backend.seed_data import SCENARIOS, EXPOSURE_GRAPH
 from backend.memory import clear_ledger
-
-# Mock LLM response class
-class MockResponse:
-    def __init__(self, content: str):
-        self.content = content
 
 class TestWorkflow(unittest.TestCase):
     def setUp(self):
@@ -18,12 +11,31 @@ class TestWorkflow(unittest.TestCase):
         self.workflow = build_workflow_graph()
         self.watchlist = ["AAPL", "MSFT", "NVDA", "TSM", "DAL"]
 
+    def mock_structured(self, schema):
+        """Stand-in for `llm.with_structured_output(schema)`.
+
+        Returns a runner whose .invoke() produces a validated instance of `schema`,
+        mirroring how the real structured-output path now behaves. Dispatch is keyed
+        on the schema type rather than fragile prompt substrings.
+        """
+        runner = MagicMock()
+        def _invoke(messages):
+            kind, payload = self.mock_llm_invoke(messages)
+            if schema is ExtractionResult:
+                return ExtractionResult(events=payload)
+            if schema is SynthesisOut:
+                return SynthesisOut(**payload)
+            raise ValueError(f"Mock got unexpected structured-output schema: {schema}")
+        runner.invoke = _invoke
+        return runner
+
     def mock_llm_invoke(self, messages):
+        """Builds the raw payload for a node; returns (kind, payload)."""
         system_msg = messages[0].content
         user_msg = messages[1].content
-        
+
         # A. Canonical Extraction Mocking
-        if "extract a canonical structured event representation" in system_msg:
+        if "canonical structured event" in system_msg:
             extracted = []
             
             # Helper to check article properties and map them
@@ -171,7 +183,7 @@ class TestWorkflow(unittest.TestCase):
                 }
                 extracted.append(event)
                 
-            return MockResponse(json.dumps(extracted))
+            return ("extraction", extracted)
 
         # B. Synthesis Mocking
         elif "review the direct and indirect catalyst events" in system_msg:
@@ -180,8 +192,8 @@ class TestWorkflow(unittest.TestCase):
             for line in user_msg.split('\n'):
                 if "TICKER CONFIG:" in line:
                     ticker = line.replace("TICKER CONFIG:", "").strip()
-            
-            return MockResponse(json.dumps({
+
+            return ("synthesis", {
                 "summaryHeadline": f"Catalysts analyzed for {ticker}",
                 "situationSummary": f"Analyzed latest direct and indirect events affecting {ticker}.",
                 "mainCatalysts": [
@@ -190,14 +202,16 @@ class TestWorkflow(unittest.TestCase):
                         "relationshipType": "direct",
                         "eventType": "supply_chain",
                         "possibleInfluence": "positive",
-                        "confidence": "high"
+                        "confidence": "high",
+                        "recency": "breaking",
+                        "impactPath": [ticker]
                     }
                 ],
                 "overallPossibleInfluence": "positive",
                 "confidence": "medium",
                 "uncertainties": ["Market volatility."],
                 "watchItems": ["Volume indicators."]
-            }))
+            })
 
         raise ValueError(f"Mock got unexpected message patterns: {messages}")
 
@@ -206,7 +220,7 @@ class TestWorkflow(unittest.TestCase):
     def test_iteration_1_direct_news(self, mock_get_llm, mock_get_llm_fast):
         """Test Iteration 1 direct company news path without duplicates."""
         mock_llm = MagicMock()
-        mock_llm.invoke = self.mock_llm_invoke
+        mock_llm.with_structured_output = self.mock_structured
         mock_get_llm.return_value = mock_llm
         # Extraction (Node 2) uses get_llm_fast; mock it too so the test is deterministic
         # and does not hit the real LLM API.
@@ -245,7 +259,7 @@ class TestWorkflow(unittest.TestCase):
     def test_iteration_2_ledger_duplicates(self, mock_get_llm, mock_get_llm_fast):
         """Test Iteration 2 catalyst memory deduplication and update detection."""
         mock_llm = MagicMock()
-        mock_llm.invoke = self.mock_llm_invoke
+        mock_llm.with_structured_output = self.mock_structured
         mock_get_llm.return_value = mock_llm
         mock_get_llm_fast.return_value = mock_llm
 
@@ -281,7 +295,7 @@ class TestWorkflow(unittest.TestCase):
     def test_iteration_3_cross_impact_routing(self, mock_get_llm, mock_get_llm_fast):
         """Test Iteration 3 cross impact graph routing for untickered events."""
         mock_llm = MagicMock()
-        mock_llm.invoke = self.mock_llm_invoke
+        mock_llm.with_structured_output = self.mock_structured
         mock_get_llm.return_value = mock_llm
         mock_get_llm_fast.return_value = mock_llm
 

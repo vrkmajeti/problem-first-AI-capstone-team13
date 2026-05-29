@@ -38,6 +38,12 @@ def set_graph(graph: Dict[str, Any]):
     global _graph_store
     _graph_store = graph
 
+def reset_graph() -> Dict[str, Any]:
+    """Restores the exposure graph to the curated seed, discarding all runtime additions."""
+    global _graph_store
+    _graph_store = copy.deepcopy(EXPOSURE_GRAPH)
+    return _graph_store
+
 def get_cross_impact_keywords(watchlist: List[str]) -> List[str]:
     """
     Finds keywords and query terms from nearby nodes connected to watchlist tickers in the exposure graph.

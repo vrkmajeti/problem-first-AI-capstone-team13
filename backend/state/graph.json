@@ -1,0 +1,1499 @@
+{
+  "nodes": [
+    {
+      "nodeId": "ticker_TSM",
+      "nodeType": "ticker",
+      "name": "TSM",
+      "aliases": [
+        "TSMC",
+        "Taiwan Semiconductor Manufacturing"
+      ],
+      "queryTerms": [
+        "TSMC",
+        "TSM",
+        "Taiwan Semiconductor"
+      ]
+    },
+    {
+      "nodeId": "ticker_DAL",
+      "nodeType": "ticker",
+      "name": "DAL",
+      "aliases": [
+        "Delta Air Lines",
+        "Delta"
+      ],
+      "queryTerms": [
+        "Delta Air Lines",
+        "DAL"
+      ]
+    },
+    {
+      "nodeId": "supplier_Foxconn",
+      "nodeType": "private_company",
+      "name": "Foxconn",
+      "aliases": [
+        "Hon Hai Precision Industry"
+      ],
+      "queryTerms": [
+        "Foxconn",
+        "Hon Hai"
+      ]
+    },
+    {
+      "nodeId": "region_Taiwan",
+      "nodeType": "region",
+      "name": "Taiwan",
+      "aliases": [
+        "Formosa"
+      ],
+      "queryTerms": [
+        "Taiwan",
+        "Hsinchu",
+        "Taipei"
+      ]
+    },
+    {
+      "nodeId": "theme_frontier_ai",
+      "nodeType": "technology_theme",
+      "name": "Frontier AI",
+      "aliases": [
+        "AI models",
+        "foundation models",
+        "LLMs",
+        "Generative AI"
+      ],
+      "queryTerms": [
+        "frontier AI",
+        "AI model",
+        "large language model",
+        "LLM",
+        "GPT",
+        "Claude",
+        "Gemini"
+      ]
+    },
+    {
+      "nodeId": "theme_semiconductors",
+      "nodeType": "technology_theme",
+      "name": "Semiconductors",
+      "aliases": [
+        "chips",
+        "silicon",
+        "foundry"
+      ],
+      "queryTerms": [
+        "semiconductor",
+        "microchips",
+        "foundry",
+        "fab"
+      ]
+    },
+    {
+      "nodeId": "route_Red_Sea",
+      "nodeType": "shipping_route",
+      "name": "Red Sea Shipping",
+      "aliases": [
+        "Suez Canal",
+        "Bab el-Mandeb"
+      ],
+      "queryTerms": [
+        "Red Sea",
+        "Suez Canal",
+        "Bab el-Mandeb",
+        "shipping lane",
+        "maritime transport"
+      ]
+    },
+    {
+      "nodeId": "risk_logistics_cost",
+      "nodeType": "risk_factor",
+      "name": "Logistics Cost Risk",
+      "aliases": [
+        "freight rates",
+        "shipping costs",
+        "fuel surcharge"
+      ],
+      "queryTerms": [
+        "freight rates",
+        "shipping cost",
+        "jet fuel",
+        "oil price"
+      ]
+    },
+    {
+      "nodeId": "company_Anthropic",
+      "nodeType": "private_company",
+      "name": "Anthropic",
+      "aliases": [
+        "Claude AI"
+      ],
+      "queryTerms": [
+        "Anthropic",
+        "Claude model",
+        "Claude 3"
+      ]
+    },
+    {
+      "nodeId": "company_OpenAI",
+      "nodeType": "private_company",
+      "name": "OpenAI",
+      "aliases": [
+        "ChatGPT",
+        "Sora"
+      ],
+      "queryTerms": [
+        "OpenAI",
+        "ChatGPT",
+        "GPT-5",
+        "Sora"
+      ]
+    },
+    {
+      "nodeId": "ticker_AAPL",
+      "nodeType": "ticker",
+      "name": "AAPL",
+      "aliases": [
+        "Apple Inc.",
+        "Apple"
+      ],
+      "queryTerms": [
+        "Apple Inc.",
+        "AAPL",
+        "iPhone",
+        "Mac",
+        "iPad",
+        "Apple Watch",
+        "AirPods",
+        "Apple Services",
+        "Tim Cook"
+      ]
+    },
+    {
+      "nodeId": "private_company_Samsung_Electronics",
+      "nodeType": "private_company",
+      "name": "Samsung Electronics",
+      "aliases": [
+        "Samsung"
+      ],
+      "queryTerms": [
+        "Samsung Electronics",
+        "Samsung phones",
+        "Samsung displays",
+        "Samsung memory"
+      ]
+    },
+    {
+      "nodeId": "private_company_Broadcom",
+      "nodeType": "private_company",
+      "name": "Broadcom Inc.",
+      "aliases": [
+        "Broadcom"
+      ],
+      "queryTerms": [
+        "Broadcom",
+        "Broadcom chips",
+        "wireless components"
+      ]
+    },
+    {
+      "nodeId": "private_company_Qualcomm",
+      "nodeType": "private_company",
+      "name": "Qualcomm Inc.",
+      "aliases": [
+        "Qualcomm"
+      ],
+      "queryTerms": [
+        "Qualcomm",
+        "Qualcomm modems",
+        "Snapdragon"
+      ]
+    },
+    {
+      "nodeId": "private_company_Google",
+      "nodeType": "private_company",
+      "name": "Google",
+      "aliases": [
+        "Alphabet Inc.",
+        "Google LLC"
+      ],
+      "queryTerms": [
+        "Google",
+        "Alphabet",
+        "Android",
+        "Google Search",
+        "Pixel phone"
+      ]
+    },
+    {
+      "nodeId": "private_company_Meta",
+      "nodeType": "private_company",
+      "name": "Meta Platforms Inc.",
+      "aliases": [
+        "Meta",
+        "Facebook"
+      ],
+      "queryTerms": [
+        "Meta Platforms",
+        "Meta",
+        "Facebook",
+        "Oculus",
+        "Quest",
+        "AR/VR"
+      ]
+    },
+    {
+      "nodeId": "region_China",
+      "nodeType": "region",
+      "name": "China",
+      "aliases": [
+        "People's Republic of China",
+        "PRC"
+      ],
+      "queryTerms": [
+        "China economy",
+        "China manufacturing",
+        "China market",
+        "US-China relations"
+      ]
+    },
+    {
+      "nodeId": "region_United_States",
+      "nodeType": "region",
+      "name": "United States",
+      "aliases": [
+        "USA",
+        "US"
+      ],
+      "queryTerms": [
+        "US economy",
+        "US consumer spending",
+        "US tech market"
+      ]
+    },
+    {
+      "nodeId": "theme_ai",
+      "nodeType": "technology_theme",
+      "name": "Artificial Intelligence",
+      "aliases": [
+        "AI",
+        "Machine Learning",
+        "ML"
+      ],
+      "queryTerms": [
+        "Artificial Intelligence",
+        "AI development",
+        "on-device AI",
+        "Siri AI"
+      ]
+    },
+    {
+      "nodeId": "technology_consumer_electronics",
+      "nodeType": "technology_theme",
+      "name": "Consumer Electronics",
+      "aliases": [
+        "CE",
+        "Electronics"
+      ],
+      "queryTerms": [
+        "Consumer Electronics market",
+        "smartphone sales",
+        "wearables"
+      ]
+    },
+    {
+      "nodeId": "sector_digital_services",
+      "nodeType": "sector",
+      "name": "Digital Services",
+      "aliases": [
+        "Software Services",
+        "Subscription Services",
+        "Apple Services"
+      ],
+      "queryTerms": [
+        "Apple Services revenue",
+        "App Store",
+        "Apple Music",
+        "iCloud",
+        "digital content services"
+      ]
+    },
+    {
+      "nodeId": "commodity_rare_earths",
+      "nodeType": "commodity",
+      "name": "Rare Earth Elements",
+      "aliases": [
+        "Rare Earths"
+      ],
+      "queryTerms": [
+        "Rare Earth Elements supply",
+        "rare earths prices",
+        "neodymium",
+        "dysprosium"
+      ]
+    },
+    {
+      "nodeId": "commodity_lithium",
+      "nodeType": "commodity",
+      "name": "Lithium",
+      "aliases": [],
+      "queryTerms": [
+        "Lithium prices",
+        "lithium supply",
+        "EV batteries"
+      ]
+    },
+    {
+      "nodeId": "risk_consumer_spending",
+      "nodeType": "risk_factor",
+      "name": "Consumer Spending",
+      "aliases": [
+        "Consumer Demand"
+      ],
+      "queryTerms": [
+        "Consumer spending trends",
+        "discretionary income",
+        "retail sales"
+      ]
+    },
+    {
+      "nodeId": "risk_geopolitical_tensions_china",
+      "nodeType": "risk_factor",
+      "name": "Geopolitical Tensions (China)",
+      "aliases": [
+        "US-China trade war",
+        "Taiwan Strait tensions"
+      ],
+      "queryTerms": [
+        "US China trade",
+        "geopolitics China",
+        "supply chain China risk"
+      ]
+    },
+    {
+      "nodeId": "ticker_AMZN",
+      "nodeType": "ticker",
+      "name": "Amazon.com Inc.",
+      "aliases": [
+        "Amazon",
+        "AWS"
+      ],
+      "queryTerms": [
+        "Amazon",
+        "AMZN",
+        "AWS",
+        "Amazon Web Services"
+      ]
+    },
+    {
+      "nodeId": "ticker_GOOG",
+      "nodeType": "ticker",
+      "name": "Alphabet Inc.",
+      "aliases": [
+        "Google",
+        "Alphabet"
+      ],
+      "queryTerms": [
+        "Google",
+        "GOOG",
+        "Alphabet",
+        "Google Cloud",
+        "Google Workspace"
+      ]
+    },
+    {
+      "nodeId": "ticker_CRM",
+      "nodeType": "ticker",
+      "name": "Salesforce Inc.",
+      "aliases": [
+        "Salesforce"
+      ],
+      "queryTerms": [
+        "Salesforce",
+        "CRM",
+        "Salesforce.com"
+      ]
+    },
+    {
+      "nodeId": "ticker_ORCL",
+      "nodeType": "ticker",
+      "name": "Oracle Corporation",
+      "aliases": [
+        "Oracle"
+      ],
+      "queryTerms": [
+        "Oracle",
+        "ORCL",
+        "Oracle Cloud"
+      ]
+    },
+    {
+      "nodeId": "ticker_SONY",
+      "nodeType": "ticker",
+      "name": "Sony Group Corporation",
+      "aliases": [
+        "Sony"
+      ],
+      "queryTerms": [
+        "Sony",
+        "SONY",
+        "PlayStation"
+      ]
+    },
+    {
+      "nodeId": "theme_cloud_computing",
+      "nodeType": "technology_theme",
+      "name": "Cloud Computing",
+      "aliases": [
+        "Cloud Services",
+        "IaaS",
+        "PaaS",
+        "SaaS"
+      ],
+      "queryTerms": [
+        "cloud computing",
+        "cloud services",
+        "data centers",
+        "Azure",
+        "AWS",
+        "Google Cloud"
+      ]
+    },
+    {
+      "nodeId": "theme_cybersecurity",
+      "nodeType": "technology_theme",
+      "name": "Cybersecurity",
+      "aliases": [
+        "Network Security",
+        "Data Protection"
+      ],
+      "queryTerms": [
+        "cybersecurity",
+        "data security",
+        "network security",
+        "threat detection",
+        "ransomware"
+      ]
+    },
+    {
+      "nodeId": "theme_gaming",
+      "nodeType": "technology_theme",
+      "name": "Gaming",
+      "aliases": [
+        "Video Games",
+        "Esports"
+      ],
+      "queryTerms": [
+        "gaming industry",
+        "video games",
+        "Xbox",
+        "PlayStation",
+        "esports"
+      ]
+    },
+    {
+      "nodeId": "risk_interest_rates",
+      "nodeType": "risk_factor",
+      "name": "Interest Rates",
+      "aliases": [
+        "Monetary Policy",
+        "Fed Rates"
+      ],
+      "queryTerms": [
+        "interest rates",
+        "monetary policy",
+        "federal reserve",
+        "central bank rates"
+      ]
+    },
+    {
+      "nodeId": "risk_regulatory_antitrust",
+      "nodeType": "risk_factor",
+      "name": "Regulatory & Antitrust Scrutiny",
+      "aliases": [
+        "Antitrust",
+        "Monopoly Concerns"
+      ],
+      "queryTerms": [
+        "antitrust",
+        "regulatory scrutiny",
+        "monopoly",
+        "competition law"
+      ]
+    },
+    {
+      "nodeId": "commodity_electricity",
+      "nodeType": "commodity",
+      "name": "Electricity",
+      "aliases": [
+        "Power",
+        "Energy"
+      ],
+      "queryTerms": [
+        "electricity prices",
+        "energy costs",
+        "power grid"
+      ]
+    },
+    {
+      "nodeId": "region_Europe",
+      "nodeType": "region",
+      "name": "Europe",
+      "aliases": [
+        "EU",
+        "European Union"
+      ],
+      "queryTerms": [
+        "Europe economy",
+        "EU regulations",
+        "European market"
+      ]
+    },
+    {
+      "nodeId": "ticker_MSFT",
+      "nodeType": "ticker",
+      "name": "MSFT",
+      "aliases": [],
+      "queryTerms": [
+        "MSFT"
+      ]
+    },
+    {
+      "nodeId": "ticker_AMD",
+      "nodeType": "ticker",
+      "name": "Advanced Micro Devices Inc.",
+      "aliases": [
+        "AMD"
+      ],
+      "queryTerms": [
+        "AMD",
+        "Advanced Micro Devices",
+        "Ryzen",
+        "Radeon",
+        "EPYC",
+        "Instinct"
+      ]
+    },
+    {
+      "nodeId": "ticker_INTC",
+      "nodeType": "ticker",
+      "name": "Intel Corporation",
+      "aliases": [
+        "Intel"
+      ],
+      "queryTerms": [
+        "Intel",
+        "Intel Corporation",
+        "Xeon",
+        "Core",
+        "Gaudi",
+        "Arc"
+      ]
+    },
+    {
+      "nodeId": "private_company_SK_Hynix",
+      "nodeType": "private_company",
+      "name": "SK Hynix Inc.",
+      "aliases": [
+        "SK Hynix",
+        "Hynix"
+      ],
+      "queryTerms": [
+        "SK Hynix",
+        "HBM",
+        "memory chips"
+      ]
+    },
+    {
+      "nodeId": "private_company_Micron_Technology",
+      "nodeType": "private_company",
+      "name": "Micron Technology Inc.",
+      "aliases": [
+        "Micron"
+      ],
+      "queryTerms": [
+        "Micron",
+        "Micron Technology",
+        "HBM",
+        "memory chips"
+      ]
+    },
+    {
+      "nodeId": "private_company_ASML",
+      "nodeType": "private_company",
+      "name": "ASML Holding N.V.",
+      "aliases": [
+        "ASML"
+      ],
+      "queryTerms": [
+        "ASML",
+        "lithography",
+        "EUV",
+        "DUV"
+      ]
+    },
+    {
+      "nodeId": "technology_data_centers",
+      "nodeType": "technology_theme",
+      "name": "Data Centers",
+      "aliases": [
+        "Data Center Infrastructure",
+        "Hyperscale Data Centers"
+      ],
+      "queryTerms": [
+        "data center",
+        "hyperscale",
+        "server infrastructure",
+        "cloud infrastructure"
+      ]
+    },
+    {
+      "nodeId": "technology_autonomous_vehicles",
+      "nodeType": "technology_theme",
+      "name": "Autonomous Vehicles",
+      "aliases": [
+        "Self-Driving Cars",
+        "ADAS"
+      ],
+      "queryTerms": [
+        "autonomous vehicles",
+        "self-driving cars",
+        "ADAS",
+        "automotive AI"
+      ]
+    },
+    {
+      "nodeId": "commodity_water",
+      "nodeType": "commodity",
+      "name": "Water",
+      "aliases": [
+        "Industrial Water Supply"
+      ],
+      "queryTerms": [
+        "water supply",
+        "semiconductor water usage",
+        "industrial water"
+      ]
+    },
+    {
+      "nodeId": "ticker_NVDA",
+      "nodeType": "ticker",
+      "name": "NVDA",
+      "aliases": [],
+      "queryTerms": [
+        "NVDA"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "fromNodeId": "region_Taiwan",
+      "toNodeId": "ticker_TSM",
+      "edgeType": "regional_exposure",
+      "strength": "high",
+      "confidence": 0.99,
+      "sourceType": "manual_seed",
+      "notes": "TSMC operates its advanced semiconductor fabrication facilities (fabs) primarily in Taiwan.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "company_Anthropic",
+      "toNodeId": "theme_frontier_ai",
+      "edgeType": "technology_exposure",
+      "strength": "high",
+      "confidence": 0.95,
+      "sourceType": "manual_seed",
+      "notes": "Anthropic develops Claude, a leading frontier LLM family, competing directly with OpenAI and Microsoft partners.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "company_OpenAI",
+      "toNodeId": "theme_frontier_ai",
+      "edgeType": "technology_exposure",
+      "strength": "high",
+      "confidence": 0.95,
+      "sourceType": "manual_seed",
+      "notes": "OpenAI is the developer of ChatGPT and GPT models, driving frontier AI themes.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "route_Red_Sea",
+      "toNodeId": "risk_logistics_cost",
+      "edgeType": "shipping_exposure",
+      "strength": "medium",
+      "confidence": 0.85,
+      "sourceType": "manual_seed",
+      "notes": "Red Sea maritime route disruptions force freight rerouting, driving up global oil, transport, and general logistics costs.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "risk_logistics_cost",
+      "toNodeId": "ticker_DAL",
+      "edgeType": "macro_sensitivity",
+      "strength": "medium",
+      "confidence": 0.8,
+      "sourceType": "manual_seed",
+      "notes": "Delta Air Lines is sensitive to global oil shocks and rising jet fuel costs resulting from logistics and supply chain strains.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "supplier_Foxconn",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "supplier_of",
+      "strength": "high",
+      "confidence": 0.95,
+      "sourceType": "llm_generated",
+      "notes": "Foxconn is Apple's primary assembler for iPhones and other key products.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_TSM",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "supplier_of",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "TSMC manufactures Apple's custom A-series and M-series chips.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "private_company_Broadcom",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "supplier_of",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "Broadcom supplies critical wireless components like Wi-Fi and Bluetooth chips to Apple.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "private_company_Qualcomm",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "supplier_of",
+      "strength": "medium",
+      "confidence": 0.65,
+      "sourceType": "llm_generated",
+      "notes": "Qualcomm supplies modem chips for cellular connectivity in iPhones, though Apple is developing its own.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "private_company_Samsung_Electronics",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "competitor_of",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "Samsung is a direct competitor to Apple in the global smartphone and tablet markets.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_MSFT",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "competitor_of",
+      "strength": "medium",
+      "confidence": 0.6,
+      "sourceType": "llm_generated",
+      "notes": "Microsoft competes with Apple in the PC market (Mac vs. Surface) and in various software/services segments.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "private_company_Meta",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "competitor_of",
+      "strength": "medium",
+      "confidence": 0.6,
+      "sourceType": "llm_generated",
+      "notes": "Meta competes with Apple in the emerging AR/VR headset market with its Quest line.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "private_company_Google",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "partner_of",
+      "strength": "medium",
+      "confidence": 0.8,
+      "sourceType": "llm_generated",
+      "notes": "Google pays Apple to be the default search engine on Safari, a significant revenue stream for Apple.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "theme_semiconductors",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "technology_exposure",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "Apple's performance is heavily reliant on its custom silicon (A-series, M-series) and overall semiconductor supply.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "theme_ai",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "technology_exposure",
+      "strength": "high",
+      "confidence": 0.85,
+      "sourceType": "llm_generated",
+      "notes": "Apple integrates AI extensively in its products (Siri, computational photography, on-device processing) and is investing in future AI capabilities.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "theme_frontier_ai",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "technology_exposure",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "Apple's future product innovation and competitive positioning will be influenced by advancements in frontier AI.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "technology_consumer_electronics",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "technology_exposure",
+      "strength": "high",
+      "confidence": 0.95,
+      "sourceType": "llm_generated",
+      "notes": "Apple's core business is deeply tied to the trends and demand within the global consumer electronics market.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "sector_digital_services",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "sector_exposure",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "Apple's growing services segment (App Store, Music, iCloud) is a significant and increasingly important revenue driver.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "region_China",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "regional_exposure",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "China is a critical manufacturing hub for Apple's products and a major sales market.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "region_United_States",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "regional_exposure",
+      "strength": "high",
+      "confidence": 0.95,
+      "sourceType": "llm_generated",
+      "notes": "The United States is Apple's largest market for sales and a primary location for R&D and corporate operations.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "region_Taiwan",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "regional_exposure",
+      "strength": "high",
+      "confidence": 0.85,
+      "sourceType": "llm_generated",
+      "notes": "Taiwan is a key region for Apple's supply chain due to major suppliers like TSMC and Foxconn.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "route_Red_Sea",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "shipping_exposure",
+      "strength": "medium",
+      "confidence": 0.6,
+      "sourceType": "llm_generated",
+      "notes": "Disruptions to global shipping routes like the Red Sea can impact Apple's supply chain and logistics costs.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "risk_logistics_cost",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "macro_sensitivity",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "Rising logistics and shipping costs can impact Apple's profitability due to its global supply chain.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "risk_consumer_spending",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "macro_sensitivity",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "Apple's sales of premium consumer electronics are highly sensitive to global consumer spending trends and discretionary income.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "risk_geopolitical_tensions_china",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "macro_sensitivity",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "Geopolitical tensions involving China pose significant risks to Apple's manufacturing, supply chain, and market access.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "commodity_rare_earths",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "commodity_exposure",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "Rare earth elements are essential components in many of Apple's electronic devices, making supply and price fluctuations relevant.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "commodity_lithium",
+      "toNodeId": "ticker_AAPL",
+      "edgeType": "commodity_exposure",
+      "strength": "medium",
+      "confidence": 0.65,
+      "sourceType": "llm_generated",
+      "notes": "Lithium is a key component for batteries used across Apple's product lineup, impacting costs and supply.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "company_OpenAI",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "partner_of",
+      "strength": "high",
+      "confidence": 0.95,
+      "sourceType": "llm_generated",
+      "notes": "Microsoft has a significant strategic investment and partnership with OpenAI, integrating its AI models into products.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_NVDA",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "supplier_of",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "NVIDIA GPUs are critical components for Microsoft's Azure AI infrastructure and cloud services.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_AMZN",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "competitor_of",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "Amazon Web Services (AWS) is a primary competitor to Microsoft Azure in the cloud computing market.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_GOOG",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "competitor_of",
+      "strength": "high",
+      "confidence": 0.85,
+      "sourceType": "llm_generated",
+      "notes": "Google Cloud competes with Azure, and Google Workspace competes with Microsoft 365.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_AAPL",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "competitor_of",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "Apple competes with Microsoft in consumer operating systems, productivity software, and some hardware segments.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_CRM",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "competitor_of",
+      "strength": "medium",
+      "confidence": 0.75,
+      "sourceType": "llm_generated",
+      "notes": "Salesforce competes with Microsoft Dynamics 365 in the enterprise CRM and business applications market.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_ORCL",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "competitor_of",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "Oracle competes with Microsoft in enterprise databases and cloud infrastructure services (OCI vs Azure).",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_SONY",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "competitor_of",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "Sony's PlayStation is the primary competitor to Microsoft's Xbox in the video game console market.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "theme_frontier_ai",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "technology_exposure",
+      "strength": "high",
+      "confidence": 0.95,
+      "sourceType": "llm_generated",
+      "notes": "Microsoft is a leading investor and developer in frontier AI, integrating advanced models across its product suite.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "theme_ai",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "technology_exposure",
+      "strength": "high",
+      "confidence": 0.95,
+      "sourceType": "llm_generated",
+      "notes": "Artificial Intelligence is a central strategic pillar for Microsoft, impacting all major business segments.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "theme_cloud_computing",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "technology_exposure",
+      "strength": "high",
+      "confidence": 0.95,
+      "sourceType": "llm_generated",
+      "notes": "Microsoft Azure is one of the largest global cloud computing platforms and a core revenue driver.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "theme_cybersecurity",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "technology_exposure",
+      "strength": "medium",
+      "confidence": 0.8,
+      "sourceType": "llm_generated",
+      "notes": "Microsoft offers a comprehensive suite of cybersecurity products and services for enterprise and consumer users.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "theme_gaming",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "technology_exposure",
+      "strength": "medium",
+      "confidence": 0.75,
+      "sourceType": "llm_generated",
+      "notes": "Microsoft's Xbox platform and gaming content represent a significant portion of its consumer business.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "theme_semiconductors",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "technology_exposure",
+      "strength": "medium",
+      "confidence": 0.8,
+      "sourceType": "llm_generated",
+      "notes": "Microsoft relies on advanced semiconductors for its cloud infrastructure, Surface devices, and Xbox consoles.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "technology_consumer_electronics",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "technology_exposure",
+      "strength": "low",
+      "confidence": 0.6,
+      "sourceType": "llm_generated",
+      "notes": "Microsoft produces consumer electronics like Surface devices and Xbox consoles, making it sensitive to market trends.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "region_United_States",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "regional_exposure",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "The United States is Microsoft's primary market, headquarters, and a major source of revenue and talent.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "region_Europe",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "regional_exposure",
+      "strength": "medium",
+      "confidence": 0.8,
+      "sourceType": "llm_generated",
+      "notes": "Europe is a significant market for Microsoft's enterprise software and cloud services, subject to regional regulations.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "region_China",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "regional_exposure",
+      "strength": "low",
+      "confidence": 0.6,
+      "sourceType": "llm_generated",
+      "notes": "Microsoft has a market presence in China, but faces regulatory complexities and geopolitical risks.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "risk_interest_rates",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "macro_sensitivity",
+      "strength": "medium",
+      "confidence": 0.75,
+      "sourceType": "llm_generated",
+      "notes": "Higher interest rates can impact enterprise IT spending and the valuation of growth stocks like Microsoft.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "risk_consumer_spending",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "macro_sensitivity",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "Microsoft's consumer segments, including Xbox and Surface devices, are sensitive to changes in consumer spending.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "sector_digital_services",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "sector_exposure",
+      "strength": "high",
+      "confidence": 0.95,
+      "sourceType": "llm_generated",
+      "notes": "Microsoft is a dominant player in the digital services sector, including cloud, software, and online platforms.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "commodity_electricity",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "commodity_exposure",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "Microsoft's extensive data center operations consume significant amounts of electricity, making it sensitive to energy prices.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "commodity_rare_earths",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "commodity_exposure",
+      "strength": "low",
+      "confidence": 0.5,
+      "sourceType": "llm_generated",
+      "notes": "Rare earth elements are used in some of Microsoft's hardware products, such as Surface devices and Xbox components.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "risk_regulatory_antitrust",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "macro_sensitivity",
+      "strength": "medium",
+      "confidence": 0.8,
+      "sourceType": "llm_generated",
+      "notes": "Microsoft faces ongoing regulatory and antitrust scrutiny globally due to its market dominance in various sectors.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "risk_geopolitical_tensions_china",
+      "toNodeId": "ticker_MSFT",
+      "edgeType": "macro_sensitivity",
+      "strength": "low",
+      "confidence": 0.55,
+      "sourceType": "llm_generated",
+      "notes": "Geopolitical tensions with China could impact Microsoft's hardware supply chain and market access in the region.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_TSM",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "supplier_of",
+      "strength": "high",
+      "confidence": 0.95,
+      "sourceType": "llm_generated",
+      "notes": "TSMC is the primary foundry for NVIDIA's advanced GPUs, making it a critical supply chain partner.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "private_company_SK_Hynix",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "supplier_of",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "SK Hynix is a major supplier of High Bandwidth Memory (HBM) crucial for NVIDIA's AI accelerators.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "private_company_Micron_Technology",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "supplier_of",
+      "strength": "medium",
+      "confidence": 0.75,
+      "sourceType": "llm_generated",
+      "notes": "Micron is a supplier of memory components, including HBM, to NVIDIA.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "private_company_Samsung_Electronics",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "supplier_of",
+      "strength": "medium",
+      "confidence": 0.8,
+      "sourceType": "llm_generated",
+      "notes": "Samsung is a supplier of memory components, including HBM, and potentially foundry services to NVIDIA.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "private_company_ASML",
+      "toNodeId": "ticker_TSM",
+      "edgeType": "supplier_of",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "ASML is a critical supplier of lithography equipment to TSMC, indirectly impacting NVIDIA's production capabilities.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "private_company_ASML",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "technology_exposure",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "ASML's advanced lithography technology is fundamental to the production of NVIDIA's chips by its foundries.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_AMZN",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "customer_of",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "Amazon is a major customer for NVIDIA's GPUs for its AWS cloud and AI initiatives.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "private_company_Meta",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "customer_of",
+      "strength": "high",
+      "confidence": 0.85,
+      "sourceType": "llm_generated",
+      "notes": "Meta Platforms is a major customer for NVIDIA's GPUs to power its AI research and infrastructure.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "company_OpenAI",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "customer_of",
+      "strength": "high",
+      "confidence": 0.8,
+      "sourceType": "llm_generated",
+      "notes": "OpenAI is a key customer for NVIDIA's GPUs, essential for training and deploying its large language models.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "company_Anthropic",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "customer_of",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "Anthropic utilizes NVIDIA GPUs for its AI model development and inference.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_AMD",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "competitor_of",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "AMD is a direct competitor to NVIDIA in the GPU market for gaming, data centers, and AI accelerators.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_INTC",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "competitor_of",
+      "strength": "medium",
+      "confidence": 0.75,
+      "sourceType": "llm_generated",
+      "notes": "Intel competes with NVIDIA in the data center AI accelerator market with its Gaudi chips and CPUs.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_GOOG",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "competitor_of",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "Google develops its own Tensor Processing Units (TPUs) as an alternative to NVIDIA GPUs for AI workloads.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_MSFT",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "partner_of",
+      "strength": "medium",
+      "confidence": 0.8,
+      "sourceType": "llm_generated",
+      "notes": "Microsoft partners with NVIDIA on various cloud and AI initiatives, including software integration and platform optimization.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "theme_ai",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "technology_exposure",
+      "strength": "high",
+      "confidence": 0.95,
+      "sourceType": "llm_generated",
+      "notes": "NVIDIA's core business and growth are heavily dependent on advancements and adoption of Artificial Intelligence.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "theme_frontier_ai",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "technology_exposure",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "NVIDIA is a critical enabler for the development and deployment of frontier AI models and research.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "theme_semiconductors",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "technology_exposure",
+      "strength": "high",
+      "confidence": 0.95,
+      "sourceType": "llm_generated",
+      "notes": "NVIDIA is a leading designer of semiconductor chips, making it highly exposed to the broader semiconductor industry.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "theme_cloud_computing",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "technology_exposure",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "Cloud computing platforms are major consumers of NVIDIA's GPUs for AI and high-performance computing workloads.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "theme_gaming",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "technology_exposure",
+      "strength": "medium",
+      "confidence": 0.8,
+      "sourceType": "llm_generated",
+      "notes": "NVIDIA's GeForce GPUs remain a significant part of its business, linking it to the gaming technology theme.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "technology_data_centers",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "technology_exposure",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "NVIDIA's data center segment, driven by AI and HPC, is a primary growth engine.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "technology_autonomous_vehicles",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "technology_exposure",
+      "strength": "medium",
+      "confidence": 0.75,
+      "sourceType": "llm_generated",
+      "notes": "NVIDIA's Drive platform is a key technology provider for autonomous driving systems.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "region_Taiwan",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "regional_exposure",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "Taiwan is critical for NVIDIA's supply chain due to TSMC's advanced manufacturing facilities.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "region_China",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "regional_exposure",
+      "strength": "high",
+      "confidence": 0.85,
+      "sourceType": "llm_generated",
+      "notes": "China is a significant market for NVIDIA's products, but also a source of geopolitical and regulatory risk.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "region_United_States",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "regional_exposure",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "The United States is NVIDIA's headquarters, primary R&D hub, and a major market.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "commodity_electricity",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "commodity_exposure",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "High electricity costs impact NVIDIA's data center customers, potentially affecting demand for power-hungry GPUs.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "commodity_water",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "commodity_exposure",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "Water is essential for semiconductor manufacturing processes, making its availability and cost a supply chain factor.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "risk_geopolitical_tensions_china",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "macro_sensitivity",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "Geopolitical tensions, especially US-China relations, directly impact NVIDIA's ability to sell advanced chips to China and its supply chain.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "risk_interest_rates",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "macro_sensitivity",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "Higher interest rates can increase borrowing costs for NVIDIA's customers (hyperscalers) and impact their capital expenditure on GPUs.",
+      "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "risk_regulatory_antitrust",
+      "toNodeId": "ticker_NVDA",
+      "edgeType": "macro_sensitivity",
+      "strength": "medium",
+      "confidence": 0.75,
+      "sourceType": "llm_generated",
+      "notes": "NVIDIA's dominant position in AI accelerators could attract increased regulatory and antitrust scrutiny.",
+      "lastReviewedAt": "2026-05-28"
+    }
+  ]
+}

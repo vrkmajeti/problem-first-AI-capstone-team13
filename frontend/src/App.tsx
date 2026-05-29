@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Play, RotateCcw, Plus, Trash2, ExternalLink, Network, Database, ShieldAlert, Cpu, Layers } from 'lucide-react';
+import { Play, RotateCcw, Plus, Trash2, ExternalLink, Network, Database, ShieldAlert, Cpu, Layers, Maximize2, X, RefreshCw } from 'lucide-react';
 
 interface Catalyst {
   label: string;
@@ -83,6 +83,125 @@ interface ExposureGraph {
   edges: GraphEdge[];
 }
 
+type ExpansionStatus = Record<string, { ticker: string; status: string; error?: string; addedNodes?: number; addedEdges?: number; updatedAt?: string }>;
+
+// ---------------------------------------------------------------------------
+// Exposure-graph layout + rendering (shared by the sidebar card and the modal)
+// ---------------------------------------------------------------------------
+const MID_NODE_TYPES = ['technology_theme', 'private_company', 'sector'];
+
+// Evenly distribute nodes into 3 columns (source factors -> themes/companies -> tickers)
+// and space them vertically by column count so the canvas never overlaps regardless of size.
+function computeLayout(nodes: GraphNode[], width: number, height: number) {
+  const padX = Math.max(38, width * 0.1);
+  const padY = Math.max(18, height * 0.06);
+  const cols: { left: GraphNode[]; mid: GraphNode[]; right: GraphNode[] } = { left: [], mid: [], right: [] };
+  for (const n of nodes) {
+    if (n.nodeType === 'ticker') cols.right.push(n);
+    else if (MID_NODE_TYPES.includes(n.nodeType)) cols.mid.push(n);
+    else cols.left.push(n);
+  }
+  const xs = { left: padX, mid: width / 2, right: width - padX };
+  const positions = new Map<string, { x: number; y: number }>();
+  (['left', 'mid', 'right'] as const).forEach(col => {
+    const arr = cols[col];
+    arr.forEach((n, i) => {
+      const y = padY + (height - 2 * padY) * (i + 1) / (arr.length + 1);
+      positions.set(n.nodeId, { x: xs[col], y });
+    });
+  });
+  return positions;
+}
+
+function getNodeColor(nodeType: string, isHighlighted: boolean) {
+  if (isHighlighted) return 'var(--accent-purple)';
+  switch (nodeType) {
+    case 'ticker': return 'var(--accent-purple)';
+    case 'technology_theme': return 'var(--accent-blue)';
+    case 'private_company': return 'var(--accent-cyan)';
+    case 'sector': return 'var(--accent-cyan)';
+    default: return 'var(--accent-orange)'; // region, risk_factor, shipping_route, commodity
+  }
+}
+
+function GraphView({ graphData, width, height, scale = 1, selectedCatalystPath }: {
+  graphData: ExposureGraph;
+  width: number;
+  height: number;
+  scale?: number;
+  selectedCatalystPath: string[] | null;
+}) {
+  if (graphData.nodes.length === 0) {
+    return <div className="canvas-placeholder">Loading graph nodes...</div>;
+  }
+  const positions = computeLayout(graphData.nodes, width, height);
+  const fontSize = 6.5 * scale;
+  const nodeById = new Map(graphData.nodes.map(n => [n.nodeId, n]));
+
+  return (
+    <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" style={{ background: '#07080d' }}>
+      {/* Edges */}
+      {graphData.edges.map((edge, idx) => {
+        const fromPos = positions.get(edge.fromNodeId);
+        const toPos = positions.get(edge.toNodeId);
+        if (!fromPos || !toPos) return null;
+
+        let isHighlighted = false;
+        if (selectedCatalystPath) {
+          const fromNode = nodeById.get(edge.fromNodeId);
+          const toNode = nodeById.get(edge.toNodeId);
+          if (fromNode && toNode) {
+            const fromIdx = selectedCatalystPath.indexOf(fromNode.name);
+            const toIdx = selectedCatalystPath.indexOf(toNode.name);
+            if (fromIdx !== -1 && toIdx !== -1 && Math.abs(fromIdx - toIdx) === 1) isHighlighted = true;
+          }
+        }
+
+        return (
+          <line
+            key={idx}
+            x1={fromPos.x} y1={fromPos.y} x2={toPos.x} y2={toPos.y}
+            stroke={isHighlighted ? 'var(--accent-cyan)' : '#27272a'}
+            strokeWidth={(isHighlighted ? 2.5 : 1) * scale}
+            strokeDasharray={edge.edgeType.includes('exposure') ? `${3 * scale},${3 * scale}` : 'none'}
+            opacity={selectedCatalystPath && !isHighlighted ? 0.2 : 0.8}
+          />
+        );
+      })}
+
+      {/* Nodes */}
+      {graphData.nodes.map((node) => {
+        const pos = positions.get(node.nodeId);
+        if (!pos) return null;
+        const isHighlighted = selectedCatalystPath?.includes(node.name) || false;
+        const r = (node.nodeType === 'ticker' ? 6 : 4.5) * scale;
+        const labelOffset = (node.nodeType === 'ticker' ? 8 : -8) * scale;
+        const textAnchor = node.nodeType === 'ticker' ? 'start' : 'end';
+
+        return (
+          <g key={node.nodeId} opacity={selectedCatalystPath && !isHighlighted ? 0.35 : 1} style={{ cursor: 'help' }}>
+            <circle
+              cx={pos.x} cy={pos.y} r={r}
+              fill={getNodeColor(node.nodeType, isHighlighted)}
+              stroke={isHighlighted ? 'white' : 'transparent'} strokeWidth={scale}
+            />
+            <text
+              x={pos.x + labelOffset} y={pos.y + 3 * scale}
+              fill={isHighlighted ? 'white' : 'var(--text-secondary)'}
+              fontSize={`${fontSize}px`}
+              fontWeight={node.nodeType === 'ticker' || isHighlighted ? 'bold' : 'normal'}
+              textAnchor={textAnchor}
+            >
+              {node.name}
+            </text>
+            <title>{`${node.name} (${node.nodeType})\nQuery terms: ${node.queryTerms.join(', ')}`}</title>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 export default function App() {
   const [watchlist, setWatchlist] = useState<string[]>([]);
   const [newTicker, setNewTicker] = useState('');
@@ -96,15 +215,30 @@ export default function App() {
   const [phoenixStatus, setPhoenixStatus] = useState<any>({ running: false, dashboardUrl: '' });
   const [selectedCatalystPath, setSelectedCatalystPath] = useState<string[] | null>(null);
   const [memoryStatus, setMemoryStatus] = useState<any>(null);
+  const [graphModalOpen, setGraphModalOpen] = useState(false);
+  const [graphStatus, setGraphStatus] = useState<ExpansionStatus>({});
 
   // Fetch initial configuration
   useEffect(() => {
     fetchWatchlist();
     fetchGraph();
+    fetchGraphStatus();
     fetchLedger();
     fetchPhoenixStatus();
     fetchMemoryStatus();
   }, []);
+
+  // Poll expansion status while any ticker is pending/running, refreshing the graph as
+  // edges land. The effect re-arms on each graphStatus change and stops once all settle.
+  useEffect(() => {
+    const active = Object.values(graphStatus).some(s => s.status === 'pending' || s.status === 'running');
+    if (!active) return;
+    const t = setTimeout(() => {
+      fetchGraphStatus();
+      fetchGraph();
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [graphStatus]);
 
   const fetchWatchlist = async () => {
     try {
@@ -127,6 +261,57 @@ export default function App() {
     } catch (e) {
       console.error('Error fetching graph', e);
     }
+  };
+
+  const fetchGraphStatus = async () => {
+    try {
+      const res = await fetch('/api/graph/status');
+      const data = await res.json();
+      setGraphStatus(data.status || {});
+    } catch (e) {
+      console.error('Error fetching graph status', e);
+    }
+  };
+
+  // Manually (re-)run the LLM exposure-graph expansion for a ticker.
+  const triggerExpansion = async (ticker: string) => {
+    try {
+      const res = await fetch('/api/graph/expand', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker, force: true })
+      });
+      const data = await res.json();
+      setGraphStatus(data.expansionStatus || {});
+    } catch (e) {
+      console.error('Error triggering graph expansion', e);
+    }
+  };
+
+  // Rebuild the whole graph for every watchlist ticker. reset=true restores the curated
+  // seed first (dropping accumulated LLM additions); reset=false refreshes additively.
+  const rebuildGraph = async (reset: boolean) => {
+    if (reset && !confirm('Reset the exposure graph to its curated seed and re-expand every watchlist ticker? This discards all accumulated LLM-generated nodes/edges.')) return;
+    try {
+      const res = await fetch('/api/graph/rebuild', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reset })
+      });
+      const data = await res.json();
+      setGraphStatus(data.expansionStatus || {});
+      fetchGraph();
+    } catch (e) {
+      console.error('Error rebuilding graph', e);
+    }
+  };
+
+  // Resolves the display status for a ticker: explicit status entry, else "ready" if a
+  // node already exists in the graph (seeded), else "none".
+  const graphStatusFor = (ticker: string): string => {
+    const s = graphStatus[ticker]?.status;
+    if (s) return s;
+    return graphData.nodes.some(n => n.nodeId === `ticker_${ticker}`) ? 'ready' : 'none';
   };
 
   const fetchLedger = async () => {
@@ -176,6 +361,9 @@ export default function App() {
       setWatchlist(data.tickers);
       setNewTicker('');
       setActiveTicker(cleanTicker);
+      // The add is immediate; graph expansion runs in the background. Seed the status
+      // map so the polling effect starts and the UI shows "pending" right away.
+      setGraphStatus(data.expansionStatus || {});
     } catch (e) {
       console.error('Error updating watchlist', e);
     }
@@ -250,46 +438,26 @@ export default function App() {
     return runResult.tickerBuckets[activeTicker] || null;
   };
 
-  // SVG Coordinates for Exposure Graph Layout
-  // Layout from left to right: Source factors (Geopolitical/Regions/Routes) -> Themes/Companies -> Target Tickers
-  const getNodeCoordinates = (nodeId: string, nodeType: string, index: number, total: number) => {
-    const spacing = 220 / (total + 1 || 2);
-    const y = 30 + (index + 1) * spacing;
-    
-    switch (nodeType) {
-      case 'ticker':
-        return { x: 330, y: 40 + (index * 45) };
-      case 'technology_theme':
-      case 'private_company':
-      case 'sector':
-        return { x: 190, y: 50 + (index * 50) };
-      default: // geopolitical, region, risk_factor, shipping_route
-        return { x: 45, y: 35 + (index * 40) };
-    }
-  };
-
-  // Group nodes by visual columns
-  const column1 = graphData.nodes.filter(n => n.nodeType !== 'ticker' && n.nodeType !== 'technology_theme' && n.nodeType !== 'private_company' && n.nodeType !== 'sector');
-  const column2 = graphData.nodes.filter(n => n.nodeType === 'technology_theme' || n.nodeType === 'private_company' || n.nodeType === 'sector');
-  const column3 = graphData.nodes.filter(n => n.nodeType === 'ticker');
-
-  const nodePositions = new Map<string, { x: number, y: number }>();
-  column1.forEach((n, idx) => nodePositions.set(n.nodeId, getNodeCoordinates(n.nodeId, n.nodeType, idx, column1.length)));
-  column2.forEach((n, idx) => nodePositions.set(n.nodeId, getNodeCoordinates(n.nodeId, n.nodeType, idx, column2.length)));
-  column3.forEach((n, idx) => nodePositions.set(n.nodeId, getNodeCoordinates(n.nodeId, n.nodeType, idx, column3.length)));
-
-  const getNodeColor = (nodeType: string, isHighlighted: boolean) => {
-    if (isHighlighted) return 'var(--accent-purple)';
-    switch (nodeType) {
-      case 'ticker':
-        return 'var(--accent-purple)';
-      case 'technology_theme':
-        return 'var(--accent-blue)';
-      case 'private_company':
-        return 'var(--accent-cyan)';
-      default:
-        return 'var(--accent-orange)';
-    }
+  // Small status pill shown next to each watchlist ticker, reflecting graph expansion.
+  const renderGraphStatusPill = (ticker: string) => {
+    const status = graphStatusFor(ticker);
+    const map: Record<string, { label: string; color: string }> = {
+      pending: { label: 'graph: queued', color: 'var(--accent-orange)' },
+      running: { label: 'graph: building…', color: 'var(--accent-orange)' },
+      done: { label: 'graph: ready', color: 'var(--accent-green)' },
+      ready: { label: 'graph: ready', color: 'var(--accent-green)' },
+      skipped: { label: 'graph: ready', color: 'var(--accent-green)' },
+      failed: { label: 'graph: failed', color: 'var(--accent-red)' },
+      none: { label: 'graph: —', color: 'var(--text-muted)' },
+    };
+    const meta = map[status] || map.none;
+    const spinning = status === 'pending' || status === 'running';
+    return (
+      <span style={{ fontSize: '0.6rem', color: meta.color, display: 'flex', alignItems: 'center', gap: '0.2rem' }} title={graphStatus[ticker]?.error || meta.label}>
+        {spinning && <span className="spinner" style={{ width: '8px', height: '8px', borderWidth: '1.5px' }} />}
+        {meta.label}
+      </span>
+    );
   };
 
   return (
@@ -413,16 +581,30 @@ export default function App() {
                     </div>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeTicker(ticker);
-                      }} 
-                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-                      title="Remove"
-                    >
-                      <Trash2 size={13} hover-color="var(--accent-red)" />
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.15rem' }}>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          triggerExpansion(ticker);
+                        }}
+                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                        title="Re-run exposure-graph update for this ticker"
+                        disabled={['pending', 'running'].includes(graphStatusFor(ticker))}
+                      >
+                        <RefreshCw size={12} />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeTicker(ticker);
+                        }}
+                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                        title="Remove"
+                      >
+                        <Trash2 size={13} hover-color="var(--accent-red)" />
+                      </button>
+                    </div>
+                    {renderGraphStatusPill(ticker)}
                     {runResult && (
                       <span className={`badge ${hasCatalysts ? influence : 'unclear'}`} style={{ fontSize: '0.65rem' }}>
                         {hasCatalysts ? influence : 'no change'}
@@ -626,92 +808,24 @@ export default function App() {
           
           {/* Exposure Graph Viewer Card */}
           <section className="glass panel-card">
-            <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              <Network size={14} /> Causal Exposure Graph
+            <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.35rem' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                <Network size={14} /> Causal Exposure Graph
+              </span>
+              <button
+                onClick={() => setGraphModalOpen(true)}
+                className="btn-secondary"
+                style={{ padding: '0.2rem 0.45rem', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem' }}
+                title="Open full-screen graph"
+              >
+                <Maximize2 size={12} /> Open
+              </button>
             </h2>
-            <div className="graph-container">
-              {graphData.nodes.length > 0 ? (
-                <svg width="100%" height="100%" viewBox="0 0 380 250" style={{ background: '#07080d' }}>
-                  {/* Edges */}
-                  {graphData.edges.map((edge, idx) => {
-                    const fromPos = nodePositions.get(edge.fromNodeId);
-                    const toPos = nodePositions.get(edge.toNodeId);
-                    if (!fromPos || !toPos) return null;
-
-                    // Check if edge is part of the highlighted hover path
-                    let isHighlighted = false;
-                    if (selectedCatalystPath) {
-                      const fromNode = graphData.nodes.find(n => n.nodeId === edge.fromNodeId);
-                      const toNode = graphData.nodes.find(n => n.nodeId === edge.toNodeId);
-                      if (fromNode && toNode) {
-                        const fromIdx = selectedCatalystPath.indexOf(fromNode.name);
-                        const toIdx = selectedCatalystPath.indexOf(toNode.name);
-                        if (fromIdx !== -1 && toIdx !== -1 && Math.abs(fromIdx - toIdx) === 1) {
-                          isHighlighted = true;
-                        }
-                      }
-                    }
-
-                    return (
-                      <line 
-                        key={idx}
-                        x1={fromPos.x}
-                        y1={fromPos.y}
-                        x2={toPos.x}
-                        y2={toPos.y}
-                        stroke={isHighlighted ? 'var(--accent-cyan)' : '#27272a'}
-                        strokeWidth={isHighlighted ? 2.5 : 1}
-                        strokeDasharray={edge.edgeType.includes('exposure') ? '3,3' : 'none'}
-                        opacity={selectedCatalystPath && !isHighlighted ? 0.25 : 0.8}
-                      />
-                    );
-                  })}
-
-                  {/* Nodes */}
-                  {graphData.nodes.map((node) => {
-                    const pos = nodePositions.get(node.nodeId);
-                    if (!pos) return null;
-
-                    const isHighlighted = selectedCatalystPath?.includes(node.name) || false;
-                    const r = node.nodeType === 'ticker' ? 6 : 4.5;
-                    const labelOffset = node.nodeType === 'ticker' ? 8 : -8;
-                    const textAnchor = node.nodeType === 'ticker' ? 'start' : 'end';
-
-                    return (
-                      <g 
-                        key={node.nodeId}
-                        opacity={selectedCatalystPath && !isHighlighted ? 0.35 : 1}
-                        style={{ cursor: 'help' }}
-                      >
-                        <circle 
-                          cx={pos.x}
-                          cy={pos.y}
-                          r={r}
-                          fill={getNodeColor(node.nodeType, isHighlighted)}
-                          stroke={isHighlighted ? 'white' : 'transparent'}
-                          strokeWidth={1}
-                        />
-                        <text
-                          x={pos.x + labelOffset}
-                          y={pos.y + 3}
-                          fill={isHighlighted ? 'white' : 'var(--text-secondary)'}
-                          fontSize="6.5px"
-                          fontWeight={node.nodeType === 'ticker' || isHighlighted ? 'bold' : 'normal'}
-                          textAnchor={textAnchor}
-                        >
-                          {node.name}
-                        </text>
-                        <title>{`${node.name} (${node.nodeType})\nQuery terms: ${node.queryTerms.join(', ')}`}</title>
-                      </g>
-                    );
-                  })}
-                </svg>
-              ) : (
-                <div className="canvas-placeholder">Loading graph nodes...</div>
-              )}
+            <div className="graph-container" style={{ cursor: graphData.nodes.length > 0 ? 'pointer' : 'default' }} onClick={() => graphData.nodes.length > 0 && setGraphModalOpen(true)}>
+              <GraphView graphData={graphData} width={380} height={250} scale={1} selectedCatalystPath={selectedCatalystPath} />
             </div>
             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textAlign: 'center', marginTop: '-0.3rem' }}>
-              Hover over indirect cards to highlight impact pathways.
+              Click to open. Hover over indirect cards to highlight impact pathways.
             </div>
           </section>
 
@@ -898,6 +1012,119 @@ export default function App() {
         </aside>
 
       </div>
+
+      {/* Full-screen Exposure Graph Modal */}
+      {graphModalOpen && (
+        <div
+          onClick={() => setGraphModalOpen(false)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1000,
+            background: 'rgba(3, 4, 8, 0.82)', backdropFilter: 'blur(4px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem'
+          }}
+        >
+          <div
+            className="glass"
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: 'min(1200px, 95vw)', height: 'min(800px, 92vh)', display: 'flex', flexDirection: 'column', padding: '1.25rem', gap: '0.75rem' }}
+          >
+            {/* Modal header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
+                <Network size={18} /> Causal Exposure Graph
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 400 }}>
+                  {graphData.nodes.length} nodes · {graphData.edges.length} edges
+                </span>
+              </h2>
+              <button onClick={() => setGraphModalOpen(false)} className="btn-secondary" style={{ padding: '0.35rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                <X size={14} /> Close
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flex: 1, gap: '1rem', minHeight: 0 }}>
+              {/* Large graph canvas */}
+              <div style={{ flex: 1, minWidth: 0, border: '1px solid var(--border-color)', borderRadius: '8px', overflow: 'hidden' }}>
+                <GraphView graphData={graphData} width={900} height={620} scale={2.2} selectedCatalystPath={selectedCatalystPath} />
+              </div>
+
+              {/* Side rail: legend + per-ticker expansion controls */}
+              <div style={{ width: '260px', display: 'flex', flexDirection: 'column', gap: '0.75rem', overflowY: 'auto' }}>
+                <div>
+                  <h3 className="section-title" style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Legend</h3>
+                  {[
+                    ['Ticker (watchlist)', 'var(--accent-purple)'],
+                    ['Technology theme', 'var(--accent-blue)'],
+                    ['Company / sector', 'var(--accent-cyan)'],
+                    ['Region / risk / commodity / route', 'var(--accent-orange)'],
+                  ].map(([label, color]) => (
+                    <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: color, flexShrink: 0 }} />
+                      {label}
+                    </div>
+                  ))}
+                  <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                    Dashed edges = exposure links · solid = supplier/competitor/partner. Flow runs left → right into the ticker.
+                  </div>
+                </div>
+
+                <div style={{ height: '1px', background: 'var(--border-color)' }} />
+
+                <div>
+                  <h3 className="section-title" style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Global Rebuild</h3>
+                  {(() => {
+                    const anyBusy = watchlist.some(t => ['pending', 'running'].includes(graphStatusFor(t)));
+                    return (
+                      <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.75rem' }}>
+                        <button
+                          onClick={() => rebuildGraph(true)}
+                          disabled={anyBusy}
+                          className="btn-secondary"
+                          style={{ flex: 1, padding: '0.35rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem', fontSize: '0.7rem', opacity: anyBusy ? 0.5 : 1 }}
+                          title="Reset to curated seed, then re-expand every watchlist ticker"
+                        >
+                          <RotateCcw size={12} /> From seed
+                        </button>
+                        <button
+                          onClick={() => rebuildGraph(false)}
+                          disabled={anyBusy}
+                          className="btn-secondary"
+                          style={{ flex: 1, padding: '0.35rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem', fontSize: '0.7rem', opacity: anyBusy ? 0.5 : 1 }}
+                          title="Force a fresh expansion for every watchlist ticker on top of the current graph"
+                        >
+                          <RefreshCw size={12} /> Refresh all
+                        </button>
+                      </div>
+                    );
+                  })()}
+
+                  <h3 className="section-title" style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Per-Ticker</h3>
+                  {watchlist.map(ticker => {
+                    const status = graphStatusFor(ticker);
+                    const busy = status === 'pending' || status === 'running';
+                    return (
+                      <div key={ticker} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.4rem', padding: '0.35rem 0', borderBottom: '1px solid var(--border-color)' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontWeight: 700, fontSize: '0.8rem' }}>{ticker}</span>
+                          {renderGraphStatusPill(ticker)}
+                        </div>
+                        <button
+                          onClick={() => triggerExpansion(ticker)}
+                          disabled={busy}
+                          className="btn-secondary"
+                          style={{ padding: '0.25rem 0.5rem', display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.7rem', opacity: busy ? 0.5 : 1 }}
+                          title="Re-run the LLM exposure-graph update for this ticker"
+                        >
+                          <RefreshCw size={12} /> Update
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
