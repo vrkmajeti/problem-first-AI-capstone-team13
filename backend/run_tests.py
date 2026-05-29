@@ -1,14 +1,20 @@
+import mimetypes
+try:
+    mimetypes.init(files=[])
+except Exception:
+    pass
+
 import unittest
 from unittest.mock import patch, MagicMock
 
-from backend.graph import build_workflow_graph, ExtractionResult, SynthesisOut
+from backend.iterations import get_workflow
+from backend.iterations.common import ExtractionResult, SynthesisOut
 from backend.seed_data import SCENARIOS, EXPOSURE_GRAPH
 from backend.memory import clear_ledger
 
 class TestWorkflow(unittest.TestCase):
     def setUp(self):
         clear_ledger()
-        self.workflow = build_workflow_graph()
         self.watchlist = ["AAPL", "MSFT", "NVDA", "TSM", "DAL"]
 
     def mock_structured(self, schema):
@@ -198,13 +204,15 @@ class TestWorkflow(unittest.TestCase):
                 "situationSummary": f"Analyzed latest direct and indirect events affecting {ticker}.",
                 "mainCatalysts": [
                     {
+                        "eventId": "evt_test_001",
                         "label": "Test Catalyst",
                         "relationshipType": "direct",
                         "eventType": "supply_chain",
                         "possibleInfluence": "positive",
                         "confidence": "high",
                         "recency": "breaking",
-                        "impactPath": [ticker]
+                        "impactPath": [ticker],
+                        "significance": 8
                     }
                 ],
                 "overallPossibleInfluence": "positive",
@@ -215,8 +223,8 @@ class TestWorkflow(unittest.TestCase):
 
         raise ValueError(f"Mock got unexpected message patterns: {messages}")
 
-    @patch('backend.graph.get_llm_fast')
-    @patch('backend.graph.get_llm')
+    @patch('backend.iterations.common.get_llm_fast')
+    @patch('backend.iterations.common.get_llm')
     def test_iteration_1_direct_news(self, mock_get_llm, mock_get_llm_fast):
         """Test Iteration 1 direct company news path without duplicates."""
         mock_llm = MagicMock()
@@ -240,7 +248,7 @@ class TestWorkflow(unittest.TestCase):
             "ingestion_metadata": {}
         }
         
-        final_state = self.workflow.invoke(initial_state)
+        final_state = get_workflow(initial_state["iteration"]).invoke(initial_state)
         
         # Assertions
         self.assertEqual(len(final_state["articles"]), 2)
@@ -254,8 +262,8 @@ class TestWorkflow(unittest.TestCase):
         self.assertIn("AAPL", final_state["ticker_syntheses"])
         self.assertIn("MSFT", final_state["ticker_syntheses"])
 
-    @patch('backend.graph.get_llm_fast')
-    @patch('backend.graph.get_llm')
+    @patch('backend.iterations.common.get_llm_fast')
+    @patch('backend.iterations.common.get_llm')
     def test_iteration_2_ledger_duplicates(self, mock_get_llm, mock_get_llm_fast):
         """Test Iteration 2 catalyst memory deduplication and update detection."""
         mock_llm = MagicMock()
@@ -277,7 +285,7 @@ class TestWorkflow(unittest.TestCase):
             "ingestion_metadata": {}
         }
         
-        final_state = self.workflow.invoke(initial_state)
+        final_state = get_workflow(initial_state["iteration"]).invoke(initial_state)
         
         # In duplicate_news scenario:
         # Article 1: Zhengzhou Fire (evt_finnhub_dup_001) -> new
@@ -290,8 +298,8 @@ class TestWorkflow(unittest.TestCase):
         # Duplicate count for AAPL should be 1
         self.assertEqual(final_state["duplicate_counts"].get("AAPL", 0), 1)
 
-    @patch('backend.graph.get_llm_fast')
-    @patch('backend.graph.get_llm')
+    @patch('backend.iterations.common.get_llm_fast')
+    @patch('backend.iterations.common.get_llm')
     def test_iteration_3_cross_impact_routing(self, mock_get_llm, mock_get_llm_fast):
         """Test Iteration 3 cross impact graph routing for untickered events."""
         mock_llm = MagicMock()
@@ -313,7 +321,7 @@ class TestWorkflow(unittest.TestCase):
             "ingestion_metadata": {}
         }
         
-        final_state = self.workflow.invoke(initial_state)
+        final_state = get_workflow(initial_state["iteration"]).invoke(initial_state)
         
         self.assertEqual(len(final_state["articles"]), 3)
         
@@ -334,6 +342,50 @@ class TestWorkflow(unittest.TestCase):
         # 3. Red Sea Disruption should route to DAL via Logistics Cost Risk -> Airline sensitivities (eventId: evt_currents_cross_003)
         redsea_routes = [r for r in routed if "evt_currents_cross_003" in r["eventId"]]
         self.assertTrue(any(r["ticker"] == "DAL" for r in redsea_routes))
+
+class TestGraphExpansion(unittest.TestCase):
+    def setUp(self):
+        from backend.routing import reset_graph
+        reset_graph()
+
+    @patch('backend.graph_expansion.GEMINI_API_KEY', '')
+    @patch('backend.graph_expansion.OPENAI_API_KEY', '')
+    def test_expand_new_ticker_no_llm(self):
+        from backend.graph_expansion import expand_graph_for_ticker
+        from backend.routing import get_graph, add_graph_node
+        
+        # Add SBUX as a private_company first
+        add_graph_node({
+            "nodeId": "private_company_SBUX",
+            "nodeType": "private_company",
+            "name": "Starbucks Corporation",
+            "ticker": "SBUX",
+            "aliases": ["Starbucks"],
+            "queryTerms": ["Starbucks", "SBUX"]
+        })
+        
+        # SBUX is initially in the graph as a private_company
+        nodes = get_graph()["nodes"]
+        sbux_nodes = [n for n in nodes if n.get("ticker") == "SBUX"]
+        self.assertEqual(len(sbux_nodes), 1)
+        self.assertEqual(sbux_nodes[0]["nodeType"], "private_company")
+        
+        # Run expansion for SBUX. Since it's not present as a "ticker" nodeType,
+        # it should NOT be skipped even if force=False.
+        res = expand_graph_for_ticker("SBUX", force=False)
+        self.assertEqual(res["ticker"], "SBUX")
+        self.assertEqual(res["addedNodes"], 0)
+        self.assertFalse(res["usedLLM"])
+        
+        # Verify the node type has been updated to "ticker"
+        nodes_after = get_graph()["nodes"]
+        sbux_nodes_after = [n for n in nodes_after if n.get("ticker") == "SBUX"]
+        self.assertEqual(len(sbux_nodes_after), 1)
+        self.assertEqual(sbux_nodes_after[0]["nodeType"], "ticker")
+        
+        # Run expansion again. Since it is now present as a "ticker", it should be skipped.
+        res_skipped = expand_graph_for_ticker("SBUX", force=False)
+        self.assertTrue(res_skipped.get("skipped", False))
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,3 +1,9 @@
+import mimetypes
+try:
+    mimetypes.init(files=[])
+except Exception:
+    pass
+
 import os
 from dotenv import load_dotenv
 

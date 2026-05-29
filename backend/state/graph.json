@@ -105,22 +105,6 @@
       ]
     },
     {
-      "nodeId": "risk_logistics_cost",
-      "nodeType": "risk_factor",
-      "name": "Logistics Cost Risk",
-      "aliases": [
-        "freight rates",
-        "shipping costs",
-        "fuel surcharge"
-      ],
-      "queryTerms": [
-        "freight rates",
-        "shipping cost",
-        "jet fuel",
-        "oil price"
-      ]
-    },
-    {
       "nodeId": "company_Anthropic",
       "nodeType": "private_company",
       "name": "Anthropic",
@@ -257,20 +241,6 @@
       ]
     },
     {
-      "nodeId": "region_United_States",
-      "nodeType": "region",
-      "name": "United States",
-      "aliases": [
-        "USA",
-        "US"
-      ],
-      "queryTerms": [
-        "US economy",
-        "US consumer spending",
-        "US tech market"
-      ]
-    },
-    {
       "nodeId": "theme_ai",
       "nodeType": "technology_theme",
       "name": "Artificial Intelligence",
@@ -340,33 +310,6 @@
         "Lithium prices",
         "lithium supply",
         "EV batteries"
-      ]
-    },
-    {
-      "nodeId": "risk_consumer_spending",
-      "nodeType": "risk_factor",
-      "name": "Consumer Spending",
-      "aliases": [
-        "Consumer Demand"
-      ],
-      "queryTerms": [
-        "Consumer spending trends",
-        "discretionary income",
-        "retail sales"
-      ]
-    },
-    {
-      "nodeId": "risk_geopolitical_tensions_china",
-      "nodeType": "risk_factor",
-      "name": "Geopolitical Tensions (China)",
-      "aliases": [
-        "US-China trade war",
-        "Taiwan Strait tensions"
-      ],
-      "queryTerms": [
-        "US China trade",
-        "geopolitics China",
-        "supply chain China risk"
       ]
     },
     {
@@ -491,21 +434,6 @@
       ]
     },
     {
-      "nodeId": "risk_interest_rates",
-      "nodeType": "risk_factor",
-      "name": "Interest Rates",
-      "aliases": [
-        "Monetary Policy",
-        "Fed Rates"
-      ],
-      "queryTerms": [
-        "interest rates",
-        "monetary policy",
-        "federal reserve",
-        "central bank rates"
-      ]
-    },
-    {
       "nodeId": "risk_regulatory_antitrust",
       "nodeType": "risk_factor",
       "name": "Regulatory & Antitrust Scrutiny",
@@ -532,20 +460,6 @@
         "electricity prices",
         "energy costs",
         "power grid"
-      ]
-    },
-    {
-      "nodeId": "region_Europe",
-      "nodeType": "region",
-      "name": "Europe",
-      "aliases": [
-        "EU",
-        "European Union"
-      ],
-      "queryTerms": [
-        "Europe economy",
-        "EU regulations",
-        "European market"
       ]
     },
     {
@@ -681,6 +595,293 @@
       "aliases": [],
       "queryTerms": [
         "NVDA"
+      ]
+    },
+    {
+      "nodeId": "risk_geopolitical_tensions_china",
+      "nodeType": "risk_factor",
+      "name": "Geopolitical Tensions (China)",
+      "aliases": [
+        "Taiwan Strait tensions",
+        "US-China trade war"
+      ],
+      "queryTerms": [
+        "Geopolitical Tensions",
+        "geopolitics China",
+        "supply chain China risk",
+        "US China trade",
+        "China"
+      ]
+    },
+    {
+      "nodeId": "ticker_MCD",
+      "nodeType": "ticker",
+      "name": "McDonald's Corporation",
+      "ticker": "MCD",
+      "aliases": [
+        "McDonald's",
+        "Mickey D's"
+      ],
+      "queryTerms": [
+        "McDonald's Corporation",
+        "MCD",
+        "fast food",
+        "hamburgers",
+        "franchising"
+      ]
+    },
+    {
+      "nodeId": "private_company_DASH",
+      "nodeType": "private_company",
+      "name": "DoorDash, Inc.",
+      "ticker": "DASH",
+      "aliases": [
+        "DoorDash"
+      ],
+      "queryTerms": [
+        "DoorDash, Inc.",
+        "DASH",
+        "food delivery"
+      ]
+    },
+    {
+      "nodeId": "private_company_YUM",
+      "nodeType": "private_company",
+      "name": "Yum! Brands, Inc.",
+      "ticker": "YUM",
+      "aliases": [
+        "Yum Brands"
+      ],
+      "queryTerms": [
+        "Yum! Brands, Inc.",
+        "YUM",
+        "fast food",
+        "pizza",
+        "taco"
+      ]
+    },
+    {
+      "nodeId": "private_company_CMG",
+      "nodeType": "private_company",
+      "name": "Chipotle Mexican Grill, Inc.",
+      "ticker": "CMG",
+      "aliases": [
+        "Chipotle"
+      ],
+      "queryTerms": [
+        "Chipotle Mexican Grill, Inc.",
+        "CMG",
+        "Mexican food"
+      ]
+    },
+    {
+      "nodeId": "private_company_QSR",
+      "nodeType": "private_company",
+      "name": "Restaurant Brands International Inc.",
+      "ticker": "QSR",
+      "aliases": [
+        "Restaurant Brands"
+      ],
+      "queryTerms": [
+        "Restaurant Brands International Inc.",
+        "QSR",
+        "fast food"
+      ]
+    },
+    {
+      "nodeId": "private_company_DRI",
+      "nodeType": "private_company",
+      "name": "Darden Restaurants, Inc.",
+      "ticker": "DRI",
+      "aliases": [
+        "Darden"
+      ],
+      "queryTerms": [
+        "Darden Restaurants, Inc.",
+        "DRI",
+        "casual dining"
+      ]
+    },
+    {
+      "nodeId": "private_company_ARMK",
+      "nodeType": "private_company",
+      "name": "Aramark",
+      "ticker": null,
+      "aliases": [
+        "Aramark Corporation"
+      ],
+      "queryTerms": [
+        "Aramark",
+        "food services"
+      ]
+    },
+    {
+      "nodeId": "private_company_TXRH",
+      "nodeType": "private_company",
+      "name": "Texas Roadhouse, Inc.",
+      "ticker": "TXRH",
+      "aliases": [
+        "Texas Roadhouse"
+      ],
+      "queryTerms": [
+        "Texas Roadhouse, Inc.",
+        "TXRH",
+        "steakhouse"
+      ]
+    },
+    {
+      "nodeId": "private_company_DPZ",
+      "nodeType": "private_company",
+      "name": "Domino's Pizza, Inc.",
+      "ticker": "DPZ",
+      "aliases": [
+        "Domino's"
+      ],
+      "queryTerms": [
+        "Domino's Pizza, Inc.",
+        "DPZ",
+        "pizza"
+      ]
+    },
+    {
+      "nodeId": "private_company_BROS",
+      "nodeType": "private_company",
+      "name": "Dutch Bros Inc.",
+      "ticker": null,
+      "aliases": [
+        "Dutch Bros"
+      ],
+      "queryTerms": [
+        "Dutch Bros Inc.",
+        "coffee"
+      ]
+    },
+    {
+      "nodeId": "private_company_CAVA",
+      "nodeType": "private_company",
+      "name": "Cava Group, Inc.",
+      "ticker": null,
+      "aliases": [
+        "Cava"
+      ],
+      "queryTerms": [
+        "Cava Group, Inc.",
+        "Mediterranean food"
+      ]
+    },
+    {
+      "nodeId": "private_company_SBUX",
+      "nodeType": "private_company",
+      "name": "Starbucks Corporation",
+      "ticker": "SBUX",
+      "aliases": [
+        "Starbucks"
+      ],
+      "queryTerms": [
+        "coffee shops",
+        "cafe",
+        "coffee",
+        "Starbucks Corporation",
+        "SBUX"
+      ]
+    },
+    {
+      "nodeId": "region_United_States",
+      "nodeType": "region",
+      "name": "United States",
+      "aliases": [
+        "US",
+        "USA"
+      ],
+      "queryTerms": [
+        "US",
+        "US consumer spending",
+        "US economy",
+        "US consumer market",
+        "United States",
+        "US tech market"
+      ]
+    },
+    {
+      "nodeId": "region_Europe",
+      "nodeType": "region",
+      "name": "Europe",
+      "aliases": [
+        "European Union",
+        "EU"
+      ],
+      "queryTerms": [
+        "Europe",
+        "EU economy",
+        "Europe economy",
+        "European market",
+        "EU regulations"
+      ]
+    },
+    {
+      "nodeId": "risk_consumer_spending",
+      "nodeType": "risk_factor",
+      "name": "Consumer Spending",
+      "aliases": [
+        "Consumer Demand"
+      ],
+      "queryTerms": [
+        "retail sales",
+        "Consumer Spending",
+        "Consumer spending trends",
+        "consumer spending",
+        "Consumer Demand",
+        "discretionary income",
+        "consumer demand trends"
+      ]
+    },
+    {
+      "nodeId": "risk_interest_rates",
+      "nodeType": "risk_factor",
+      "name": "Interest Rates",
+      "aliases": [
+        "Fed Rates",
+        "Monetary Policy"
+      ],
+      "queryTerms": [
+        "central bank rates",
+        "monetary policy",
+        "interest rates",
+        "Federal Reserve",
+        "federal reserve"
+      ]
+    },
+    {
+      "nodeId": "risk_logistics_cost",
+      "nodeType": "risk_factor",
+      "name": "Logistics Cost Risk",
+      "aliases": [
+        "shipping costs",
+        "freight rates",
+        "fuel surcharge"
+      ],
+      "queryTerms": [
+        "shipping costs",
+        "jet fuel",
+        "logistics costs",
+        "freight rates",
+        "shipping cost",
+        "oil price"
+      ]
+    },
+    {
+      "nodeId": "theme_food_service",
+      "nodeType": "technology_theme",
+      "name": "Food Service",
+      "ticker": null,
+      "aliases": [
+        "restaurant industry",
+        "food and beverage"
+      ],
+      "queryTerms": [
+        "food service",
+        "restaurant trends",
+        "food and beverage industry"
       ]
     }
   ],
@@ -1494,6 +1695,206 @@
       "sourceType": "llm_generated",
       "notes": "NVIDIA's dominant position in AI accelerators could attract increased regulatory and antitrust scrutiny.",
       "lastReviewedAt": "2026-05-28"
+    },
+    {
+      "fromNodeId": "ticker_MCD",
+      "toNodeId": "private_company_SBUX",
+      "edgeType": "competitor_of",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "McDonald's competes directly with Starbucks in the fast food and beverage market.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "ticker_MCD",
+      "toNodeId": "private_company_YUM",
+      "edgeType": "competitor_of",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "McDonald's competes with Yum! Brands, which owns Taco Bell and KFC.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "ticker_MCD",
+      "toNodeId": "private_company_CMG",
+      "edgeType": "competitor_of",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "McDonald's competes with Chipotle in the fast casual dining segment.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "ticker_MCD",
+      "toNodeId": "private_company_QSR",
+      "edgeType": "competitor_of",
+      "strength": "medium",
+      "confidence": 0.7,
+      "sourceType": "llm_generated",
+      "notes": "McDonald's competes with Restaurant Brands International, which owns Burger King.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "ticker_MCD",
+      "toNodeId": "private_company_DRI",
+      "edgeType": "competitor_of",
+      "strength": "medium",
+      "confidence": 0.6,
+      "sourceType": "llm_generated",
+      "notes": "McDonald's competes with Darden Restaurants in the casual dining space.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "ticker_MCD",
+      "toNodeId": "private_company_ARMK",
+      "edgeType": "partner_of",
+      "strength": "low",
+      "confidence": 0.5,
+      "sourceType": "llm_generated",
+      "notes": "McDonald's may partner with Aramark for food service solutions.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "ticker_MCD",
+      "toNodeId": "private_company_TXRH",
+      "edgeType": "competitor_of",
+      "strength": "low",
+      "confidence": 0.4,
+      "sourceType": "llm_generated",
+      "notes": "McDonald's competes with Texas Roadhouse in the broader dining market.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "ticker_MCD",
+      "toNodeId": "private_company_DPZ",
+      "edgeType": "competitor_of",
+      "strength": "medium",
+      "confidence": 0.6,
+      "sourceType": "llm_generated",
+      "notes": "McDonald's competes with Domino's Pizza in the fast food pizza segment.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "ticker_MCD",
+      "toNodeId": "private_company_BROS",
+      "edgeType": "competitor_of",
+      "strength": "low",
+      "confidence": 0.4,
+      "sourceType": "llm_generated",
+      "notes": "McDonald's competes with Dutch Bros in the coffee and beverage market.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "ticker_MCD",
+      "toNodeId": "private_company_CAVA",
+      "edgeType": "competitor_of",
+      "strength": "low",
+      "confidence": 0.4,
+      "sourceType": "llm_generated",
+      "notes": "McDonald's competes with Cava in the fast casual dining segment.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "ticker_MCD",
+      "toNodeId": "risk_consumer_spending",
+      "edgeType": "macro_sensitivity",
+      "strength": "high",
+      "confidence": 0.8,
+      "sourceType": "llm_generated",
+      "notes": "McDonald's revenue is highly sensitive to changes in consumer spending.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "ticker_MCD",
+      "toNodeId": "region_United_States",
+      "edgeType": "regional_exposure",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "A significant portion of McDonald's revenue comes from the United States.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "ticker_MCD",
+      "toNodeId": "risk_geopolitical_tensions_china",
+      "edgeType": "macro_sensitivity",
+      "strength": "medium",
+      "confidence": 0.6,
+      "sourceType": "llm_generated",
+      "notes": "Geopolitical tensions in China may impact McDonald's operations and supply chain.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "private_company_SBUX",
+      "toNodeId": "ticker_MCD",
+      "edgeType": "competitor_of",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "Starbucks competes directly with McDonald's in the coffee and beverage market.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "private_company_SBUX",
+      "toNodeId": "region_United_States",
+      "edgeType": "regional_exposure",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "The majority of Starbucks' revenue comes from the United States.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "private_company_SBUX",
+      "toNodeId": "region_Europe",
+      "edgeType": "regional_exposure",
+      "strength": "medium",
+      "confidence": 0.6,
+      "sourceType": "llm_generated",
+      "notes": "Starbucks has a growing presence in Europe, impacting its revenue.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "private_company_SBUX",
+      "toNodeId": "risk_consumer_spending",
+      "edgeType": "macro_sensitivity",
+      "strength": "high",
+      "confidence": 0.8,
+      "sourceType": "llm_generated",
+      "notes": "Starbucks' performance is highly sensitive to changes in consumer spending.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "private_company_SBUX",
+      "toNodeId": "risk_interest_rates",
+      "edgeType": "macro_sensitivity",
+      "strength": "medium",
+      "confidence": 0.5,
+      "sourceType": "llm_generated",
+      "notes": "Interest rates can affect consumer spending and, consequently, Starbucks' sales.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "private_company_SBUX",
+      "toNodeId": "risk_logistics_cost",
+      "edgeType": "macro_sensitivity",
+      "strength": "medium",
+      "confidence": 0.6,
+      "sourceType": "llm_generated",
+      "notes": "Logistics costs impact Starbucks' supply chain and overall profitability.",
+      "lastReviewedAt": "2026-05-29"
+    },
+    {
+      "fromNodeId": "private_company_SBUX",
+      "toNodeId": "theme_food_service",
+      "edgeType": "technology_exposure",
+      "strength": "high",
+      "confidence": 0.9,
+      "sourceType": "llm_generated",
+      "notes": "Starbucks is a key player in the food service industry, influencing trends and technologies.",
+      "lastReviewedAt": "2026-05-29"
     }
   ]
 }

@@ -1,0 +1,8 @@
+{
+  "python-envs.workspaceSearchPaths": [
+    "backend/.venv"
+  ],
+  "python.venvFolders": [
+    "backend"
+  ]
+}

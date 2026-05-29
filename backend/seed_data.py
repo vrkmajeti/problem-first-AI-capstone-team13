@@ -6,35 +6,40 @@ EXPOSURE_GRAPH = {
         {
             "nodeId": "ticker_AAPL",
             "nodeType": "ticker",
-            "name": "AAPL",
+            "name": "Apple Inc.",
+            "ticker": "AAPL",
             "aliases": ["Apple", "Apple Inc."],
             "queryTerms": ["Apple", "AAPL", "iPhone"]
         },
         {
             "nodeId": "ticker_MSFT",
             "nodeType": "ticker",
-            "name": "MSFT",
+            "name": "Microsoft Corp.",
+            "ticker": "MSFT",
             "aliases": ["Microsoft", "Microsoft Corp."],
             "queryTerms": ["Microsoft", "MSFT", "Azure"]
         },
         {
             "nodeId": "ticker_NVDA",
             "nodeType": "ticker",
-            "name": "NVDA",
+            "name": "Nvidia Corp.",
+            "ticker": "NVDA",
             "aliases": ["Nvidia", "Nvidia Corp."],
             "queryTerms": ["Nvidia", "NVDA", "GeForce", "H100", "Blackwell"]
         },
         {
             "nodeId": "ticker_TSM",
             "nodeType": "ticker",
-            "name": "TSM",
+            "name": "TSMC",
+            "ticker": "TSM",
             "aliases": ["TSMC", "Taiwan Semiconductor Manufacturing"],
             "queryTerms": ["TSMC", "TSM", "Taiwan Semiconductor"]
         },
         {
             "nodeId": "ticker_DAL",
             "nodeType": "ticker",
-            "name": "DAL",
+            "name": "Delta Air Lines",
+            "ticker": "DAL",
             "aliases": ["Delta Air Lines", "Delta"],
             "queryTerms": ["Delta Air Lines", "DAL"]
         },
@@ -43,6 +48,7 @@ EXPOSURE_GRAPH = {
             "nodeId": "supplier_Foxconn",
             "nodeType": "private_company",
             "name": "Foxconn",
+            "ticker": "HNHPF",
             "aliases": ["Hon Hai Precision Industry"],
             "queryTerms": ["Foxconn", "Hon Hai"]
         },

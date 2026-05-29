@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Play, RotateCcw, Plus, Trash2, ExternalLink, Network, Database, ShieldAlert, Cpu, Layers, Maximize2, X, RefreshCw } from 'lucide-react';
+import { Play, RotateCcw, Plus, Trash2, ExternalLink, Network, Database, ShieldAlert, Cpu, Layers, Maximize2, X, RefreshCw, Menu, ChevronDown, ChevronUp, Clock, AlertCircle } from 'lucide-react';
 
 interface Catalyst {
   label: string;
@@ -66,6 +66,7 @@ interface GraphNode {
   nodeId: string;
   nodeType: string;
   name: string;
+  ticker?: string;
   queryTerms: string[];
 }
 
@@ -192,9 +193,9 @@ function GraphView({ graphData, width, height, scale = 1, selectedCatalystPath }
               fontWeight={node.nodeType === 'ticker' || isHighlighted ? 'bold' : 'normal'}
               textAnchor={textAnchor}
             >
-              {node.name}
+              {node.ticker ? `${node.name} (${node.ticker})` : node.name}
             </text>
-            <title>{`${node.name} (${node.nodeType})\nQuery terms: ${node.queryTerms.join(', ')}`}</title>
+            <title>{`${node.name}${node.ticker ? ` (${node.ticker})` : ''} (${node.nodeType})\nQuery terms: ${node.queryTerms.join(', ')}`}</title>
           </g>
         );
       })}
@@ -207,8 +208,9 @@ export default function App() {
   const [newTicker, setNewTicker] = useState('');
   const [iteration, setIteration] = useState<number>(3);
   const [scenarioId, setScenarioId] = useState<string>('live');
-  const [activeTicker, setActiveTicker] = useState<string>('AAPL');
-  const [runResult, setRunResult] = useState<RunResult | null>(null);
+  const [activeTicker, setActiveTicker] = useState<string>('dashboard');
+  const [runResults, setRunResults] = useState<Record<number, RunResult | null>>({});
+  const runResult = runResults[iteration] || null;
   const [graphData, setGraphData] = useState<ExposureGraph>({ nodes: [], edges: [] });
   const [ledgerEntries, setLedgerEntries] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -218,15 +220,54 @@ export default function App() {
   const [graphModalOpen, setGraphModalOpen] = useState(false);
   const [graphStatus, setGraphStatus] = useState<ExpansionStatus>({});
 
-  // Fetch initial configuration
+  // Dashboard Tabs & Status Bar states
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [ledgerExpanded, setLedgerExpanded] = useState(false);
+  const [activeDashTab, setActiveDashTab] = useState<'watchlist' | 'ledger'>('watchlist');
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const [synthesisExpanded, setSynthesisExpanded] = useState(false);
+  const [selectedBackgroundStory, setSelectedBackgroundStory] = useState<string | null>(null);
+  const [summaryDetailExpanded, setSummaryDetailExpanded] = useState(false);
+
+
+  // Time conversion helper
+  const formatRelativeTime = (publishedAt: string): string => {
+    if (!publishedAt) return '—';
+    const pub = new Date(publishedAt).getTime();
+    const now = scenarioId === 'live' ? Date.now() : new Date('2026-05-28T17:25:00Z').getTime();
+    const diffMs = now - pub;
+    const diffMins = Math.max(0, Math.floor(diffMs / 60000));
+    
+    if (diffMins < 1) return 'just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    return `${Math.floor(diffHours / 24)}d ago`;
+  };
+
+  const getEventDecision = (eventId: string): string => {
+    if (!runResult || !runResult.routedCandidates) return 'new';
+    const cand = runResult.routedCandidates.find(c => c.eventId === eventId && c.ticker === activeTicker);
+    return cand?.ledgerDecision || 'new';
+  };
+
+  const getEventCatalystId = (eventId: string): string | null => {
+    if (!runResult || !runResult.routedCandidates) return null;
+    const cand = runResult.routedCandidates.find(c => c.eventId === eventId && c.ticker === activeTicker);
+    return cand?.catalystId || null;
+  };
+
+  const getEventTimestamp = (sourceArticleIds: string[]): string | null => {
+    if (!runResult || !runResult.rawArticles || !sourceArticleIds || sourceArticleIds.length === 0) return null;
+    const art = runResult.rawArticles.find(a => sourceArticleIds.includes(a.articleId));
+    return art?.publishedAt || null;
+  };
+
+  // Removed initial load; now handled by connection manager check below
+
   useEffect(() => {
-    fetchWatchlist();
-    fetchGraph();
-    fetchGraphStatus();
     fetchLedger();
-    fetchPhoenixStatus();
-    fetchMemoryStatus();
-  }, []);
+  }, [iteration]);
 
   // Poll expansion status while any ticker is pending/running, refreshing the graph as
   // edges land. The effect re-arms on each graphStatus change and stops once all settle.
@@ -246,7 +287,7 @@ export default function App() {
       const data = await res.json();
       setWatchlist(data.tickers);
       if (data.tickers.length > 0 && !activeTicker) {
-        setActiveTicker(data.tickers[0]);
+        setActiveTicker('dashboard');
       }
     } catch (e) {
       console.error('Error fetching watchlist', e);
@@ -314,9 +355,27 @@ export default function App() {
     return graphData.nodes.some(n => n.nodeId === `ticker_${ticker}`) ? 'ready' : 'none';
   };
 
+  const fetchResults = async () => {
+    try {
+      const res = await fetch('/api/results');
+      if (res.ok) {
+        const data = await res.json();
+        if (data) {
+          const formatted: Record<number, RunResult> = {};
+          Object.entries(data).forEach(([k, v]) => {
+            formatted[Number(k)] = v as RunResult;
+          });
+          setRunResults(formatted);
+        }
+      }
+    } catch (e) {
+      console.error('Error fetching run results', e);
+    }
+  };
+
   const fetchLedger = async () => {
     try {
-      const res = await fetch('/api/ledger');
+      const res = await fetch(`/api/ledger?iteration=${iteration}`);
       const data = await res.json();
       setLedgerEntries(data);
     } catch (e) {
@@ -342,6 +401,90 @@ export default function App() {
     } catch (e) {
       console.error('Error fetching memory status', e);
     }
+  };
+
+  const [connectionState, setConnectionState] = useState<'connecting' | 'connected' | 'failed'>('connecting');
+  const [retryCount, setRetryCount] = useState(0);
+
+  const checkConnectionDirect = async (): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/watchlist');
+      if (res.ok) {
+        const data = await res.json();
+        setWatchlist(data.tickers);
+        if (data.tickers.length > 0 && !activeTicker) {
+          setActiveTicker('dashboard');
+        }
+        // Fetch all other data on successful connection
+        fetchGraph();
+        fetchGraphStatus();
+        fetchResults();
+        fetchPhoenixStatus();
+        fetchMemoryStatus();
+        setConnectionState('connected');
+        return true;
+      }
+    } catch (e) {
+      console.warn('Backend connection attempt failed:', e);
+    }
+    return false;
+  };
+
+  useEffect(() => {
+    let intervalId: any;
+    let elapsed = 0;
+
+    const runCheck = async () => {
+      const success = await checkConnectionDirect();
+      if (!success) {
+        intervalId = setInterval(async () => {
+          elapsed += 10;
+          if (elapsed >= 90) { // 1.5 minutes
+            setConnectionState('failed');
+            clearInterval(intervalId);
+          } else {
+            setRetryCount(c => c + 1);
+            const ok = await checkConnectionDirect();
+            if (ok) {
+              clearInterval(intervalId);
+            }
+          }
+        }, 10000);
+      }
+    };
+
+    runCheck();
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, []);
+
+  const handleManualRetry = () => {
+    setConnectionState('connecting');
+    setRetryCount(0);
+    let elapsed = 0;
+
+    const runCheck = async () => {
+      const success = await checkConnectionDirect();
+      if (!success) {
+        const intervalId = setInterval(async () => {
+          elapsed += 10;
+          if (elapsed >= 90) {
+            setConnectionState('failed');
+            clearInterval(intervalId);
+          } else {
+            setRetryCount(c => c + 1);
+            const ok = await checkConnectionDirect();
+            if (ok) {
+              clearInterval(intervalId);
+            }
+          }
+        }, 10000);
+      }
+    };
+
+    runCheck();
   };
 
   const addTicker = async (e: React.FormEvent) => {
@@ -388,9 +531,9 @@ export default function App() {
   };
 
   const clearLedgerMemory = async () => {
-    if (!confirm('Are you sure you want to clear the Catalyst Ledger memory? This will reset all story updates.')) return;
+    if (!confirm('Are you sure you want to clear the Catalyst Ledger memory for this iteration? This will reset all story updates.')) return;
     try {
-      const res = await fetch('/api/ledger/clear', { method: 'POST' });
+      const res = await fetch(`/api/ledger/clear?iteration=${iteration}`, { method: 'POST' });
       await res.json();
       fetchLedger();
       alert('Ledger cleared successfully!');
@@ -417,7 +560,10 @@ export default function App() {
         throw new Error(err.detail || 'Pipeline execution failed');
       }
       const data = await res.json();
-      setRunResult(data);
+      setRunResults(prev => ({
+        ...prev,
+        [iteration]: data
+      }));
       fetchLedger();
       fetchGraph();
       fetchMemoryStatus();
@@ -460,6 +606,53 @@ export default function App() {
     );
   };
 
+  if (connectionState === 'connecting') {
+    return (
+      <div className="connection-overlay">
+        <div className="glass connection-card">
+          <div className="connection-glow" />
+          <div className="pulse-loader">
+            <Cpu className="pulse-icon" size={48} />
+          </div>
+          <h2>⚡ Connecting to Cross-Impact Engine</h2>
+          <p className="connection-status">
+            The backend server at <code>http://localhost:8000</code> is still loading or offline.
+          </p>
+          <div className="polling-indicator">
+            <span className="dot-pulse" />
+            <span>Retrying connection (Attempt {retryCount + 1})...</span>
+          </div>
+          <div className="progress-bar-container">
+            <div className="progress-bar-fill" style={{ width: `${(retryCount / 9) * 100}%` }} />
+          </div>
+          <span className="connection-info">Polling will stop automatically after 1.5 minutes.</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (connectionState === 'failed') {
+    return (
+      <div className="connection-overlay">
+        <div className="glass connection-card connection-failed-card">
+          <div className="connection-failed-glow" />
+          <AlertCircle className="failed-icon" size={48} />
+          <h2>❌ Server Offline / Connection Failed</h2>
+          <p className="connection-status">
+            Unable to establish a connection to the backend server at <code>http://localhost:8000</code> after 1.5 minutes of polling.
+          </p>
+          <p className="connection-instructions">
+            Please make sure that the backend FastAPI server is running (e.g. via <code>uvicorn backend.main:app --reload</code>).
+          </p>
+          <button className="btn-primary retry-btn" onClick={handleManualRetry}>
+            <RotateCcw size={16} style={{ marginRight: '0.4rem' }} />
+            Retry Connection
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
       {/* Header Panel */}
@@ -470,59 +663,45 @@ export default function App() {
         </div>
 
         <div className="header-controls">
-          {/* Iteration Selector */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 800 }}>Pipeline Mode</span>
-            <select 
-              className="custom-select" 
-              value={iteration} 
-              onChange={(e) => setIteration(Number(e.target.value))}
+          {/* Affinity-style Segmented control Iteration Switcher */}
+          <div className="affinity-switcher">
+            <div className={`affinity-slider slider-it${iteration}`} />
+            <button 
+              className={`affinity-btn ${iteration === 1 ? 'active' : ''}`} 
+              onClick={() => {
+                setIteration(1);
+                setSelectedCatalystPath(null);
+              }}
             >
-              <option value={1}>Iteration 1: Direct News Synthesis</option>
-              <option value={2}>Iteration 2: Catalyst Memory Dedup</option>
-              <option value={3}>Iteration 3: Graph Cross-Impact Routing</option>
-            </select>
+              ⚡ Direct News
+            </button>
+            <button 
+              className={`affinity-btn ${iteration === 2 ? 'active' : ''}`} 
+              onClick={() => {
+                setIteration(2);
+                setSelectedCatalystPath(null);
+              }}
+            >
+              🧠 Memory Dedup
+            </button>
+            <button 
+              className={`affinity-btn ${iteration === 3 ? 'active' : ''}`} 
+              onClick={() => {
+                setIteration(3);
+                setSelectedCatalystPath(null);
+              }}
+            >
+              🕸 Graph Routing
+            </button>
           </div>
 
-          {/* Scenario Selector */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 800 }}>News Source / Replay</span>
-            <select 
-              className="custom-select" 
-              value={scenarioId} 
-              onChange={(e) => setScenarioId(e.target.value)}
-            >
-              <option value="live">Live Feeds (Finnhub + Currents)</option>
-              <option value="direct_news">Replay Scenario 1: Direct Announcements</option>
-              <option value="duplicate_news">Replay Scenario 2: Duplicate Articles</option>
-              <option value="cross_impact">Replay Scenario 3: Untickered Geopolitical/Tech</option>
-            </select>
-          </div>
-
-          {/* Ledger Clear Reset */}
+          {/* Mobile hamburger menu toggle button */}
           <button 
-            className="btn-secondary" 
-            onClick={clearLedgerMemory} 
-            title="Reset active story thread cache in Ledger"
-            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', height: '38px', marginTop: '14px' }}
+            className="btn-secondary mobile-menu-btn" 
+            style={{ padding: '0.5rem', height: '36px', width: '36px', display: 'none', alignItems: 'center', justifyContent: 'center' }} 
+            onClick={() => setSidebarOpen(true)}
           >
-            <RotateCcw size={15} />
-            <span>Reset Cache</span>
-          </button>
-
-          {/* Run Button */}
-          <button 
-            className="btn-primary" 
-            onClick={runPipeline} 
-            disabled={loading || watchlist.length === 0}
-            style={{ height: '38px', marginTop: '14px' }}
-          >
-            {loading ? (
-              <div className="spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }}></div>
-            ) : (
-              <Play size={16} fill="white" />
-            )}
-            <span>Fetch Catalysts</span>
+            <Menu size={16} />
           </button>
         </div>
       </header>
@@ -531,7 +710,10 @@ export default function App() {
       <div className="workspace">
         
         {/* Left Sidebar - Watchlist */}
-        <aside className="glass sidebar">
+        {sidebarOpen && (
+          <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
+        )}
+        <aside className={`glass sidebar ${sidebarOpen ? 'open' : ''}`}>
           <div>
             <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
               <Layers size={14} /> Watchlist Tickers
@@ -554,6 +736,20 @@ export default function App() {
 
           {/* Ticker List */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', flex: 1, overflowY: 'auto' }}>
+            {/* Pinned Overview Dashboard Selector */}
+            <div 
+              className={`glass glass-hover watchlist-item ${activeTicker === 'dashboard' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTicker('dashboard');
+                setSelectedCatalystPath(null);
+                setSidebarOpen(false);
+              }}
+              style={{ borderStyle: 'dashed', borderColor: 'rgba(255,255,255,0.15)', display: 'flex', gap: '0.5rem', alignItems: 'center', padding: '0.75rem 1rem' }}
+            >
+              <Layers size={14} style={{ color: 'var(--accent-purple)' }} />
+              <div style={{ fontWeight: 800, fontSize: '0.85rem' }}>Overview Dashboard</div>
+            </div>
+
             {watchlist.map(ticker => {
               const isActive = activeTicker === ticker;
               const tickerSynthesis = runResult?.tickerSyntheses?.[ticker];
@@ -567,32 +763,40 @@ export default function App() {
                   onClick={() => {
                     setActiveTicker(ticker);
                     setSelectedCatalystPath(null);
+                    setSidebarOpen(false);
                   }}
                 >
                   <div>
                     <div className="ticker-name">{ticker}</div>
                     <div className="company-name">
-                      {ticker === 'AAPL' && 'Apple Inc.'}
-                      {ticker === 'MSFT' && 'Microsoft Corp.'}
-                      {ticker === 'NVDA' && 'Nvidia Corp.'}
-                      {ticker === 'TSM' && 'TSMC'}
-                      {ticker === 'DAL' && 'Delta Air'}
-                      {!['AAPL','MSFT','NVDA','TSM','DAL'].includes(ticker) && 'Public Company'}
+                      {(() => {
+                        const node = graphData.nodes.find(n => n.nodeType === 'ticker' && n.ticker === ticker);
+                        return node ? node.name : (
+                          ticker === 'AAPL' ? 'Apple Inc.' :
+                          ticker === 'MSFT' ? 'Microsoft Corp.' :
+                          ticker === 'NVDA' ? 'Nvidia Corp.' :
+                          ticker === 'TSM' ? 'TSMC' :
+                          ticker === 'DAL' ? 'Delta Air Lines' : 'Public Company'
+                        );
+                      })()}
                     </div>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.15rem' }}>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          triggerExpansion(ticker);
-                        }}
-                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-                        title="Re-run exposure-graph update for this ticker"
-                        disabled={['pending', 'running'].includes(graphStatusFor(ticker))}
-                      >
-                        <RefreshCw size={12} />
-                      </button>
+                      {/* Expansion updates only make sense in Iteration 3 */}
+                      {iteration === 3 && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            triggerExpansion(ticker);
+                          }}
+                          style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                          title="Re-run exposure-graph update for this ticker"
+                          disabled={['pending', 'running'].includes(graphStatusFor(ticker))}
+                        >
+                          <RefreshCw size={12} />
+                        </button>
+                      )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -604,7 +808,7 @@ export default function App() {
                         <Trash2 size={13} hover-color="var(--accent-red)" />
                       </button>
                     </div>
-                    {renderGraphStatusPill(ticker)}
+                    {iteration === 3 && renderGraphStatusPill(ticker)}
                     {runResult && (
                       <span className={`badge ${hasCatalysts ? influence : 'unclear'}`} style={{ fontSize: '0.65rem' }}>
                         {hasCatalysts ? influence : 'no change'}
@@ -619,19 +823,259 @@ export default function App() {
 
         {/* Center Panel - Dashboard and Synthesized briefing */}
         <main className="main-content">
+          
+          {/* Action Control Panel */}
+          <div className="action-control-panel">
+            <div className="action-control-group">
+              {/* Scenario Selector */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 800 }}>News Source / Replay</span>
+                <select 
+                  className="custom-select" 
+                  value={scenarioId} 
+                  onChange={(e) => setScenarioId(e.target.value)}
+                  style={{ height: '36px', padding: '0.4rem 0.8rem', fontSize: '0.82rem' }}
+                >
+                  <option value="live">Live Feeds (Finnhub + Currents)</option>
+                  <option value="direct_news">Replay Scenario 1: Direct Announcements</option>
+                  <option value="duplicate_news">Replay Scenario 2: Duplicate Articles</option>
+                  <option value="cross_impact">Replay Scenario 3: Untickered Geopolitical/Tech</option>
+                </select>
+              </div>
+
+              {/* Ledger Clear Reset (Only relevant in Memory iterations) */}
+              {iteration > 1 && (
+                <button 
+                  className="btn-secondary" 
+                  onClick={clearLedgerMemory} 
+                  title="Reset active story thread cache in Ledger"
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', height: '36px', marginTop: '12px' }}
+                >
+                  <RotateCcw size={14} />
+                  <span style={{ fontSize: '0.8rem' }}>Reset Cache</span>
+                </button>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              {/* Run Button */}
+              <button 
+                className="btn-primary" 
+                onClick={runPipeline} 
+                disabled={loading || watchlist.length === 0}
+                style={{ height: '36px', padding: '0.5rem 1.25rem', marginTop: '12px' }}
+              >
+                {loading ? (
+                  <div className="spinner" style={{ width: '14px', height: '14px', borderWidth: '2px' }}></div>
+                ) : (
+                  <Play size={14} fill="white" />
+                )}
+                <span style={{ fontSize: '0.82rem' }}>Fetch Catalysts</span>
+              </button>
+            </div>
+          </div>
+
           {loading ? (
             <div className="glass loading-overlay" style={{ flex: 1 }}>
               <div className="spinner"></div>
-              <h2>Executing LLM Catalyst Workflow Graph</h2>
+              <h2>
+                {iteration === 1 && "Executing LLM Direct News Workflow"}
+                {iteration === 2 && "Executing LLM Memory Deduplication"}
+                {iteration === 3 && "Executing LLM Catalyst Workflow Graph"}
+              </h2>
               <p style={{ color: 'var(--text-secondary)' }}>
                 {iteration === 1 && "Fetching direct articles and executing extraction + synthesis..."}
                 {iteration === 2 && "Deduplicating articles using local vector memory ledger..."}
                 {iteration === 3 && "Expanding search terms and routing untickered geopolitical shocks..."}
               </p>
             </div>
+          ) : activeTicker === 'dashboard' ? (
+            /* ==========================================================
+               View A: WATCHLIST OVERVIEW DASHBOARD (2-COLUMN SPLIT)
+               ========================================================== */
+            <div className="dashboard-split">
+              {/* Left Column: Watchlist Signals */}
+              {(() => {
+                const activeAlertTickers = watchlist.filter(t => {
+                  const synth = runResult?.tickerSyntheses?.[t];
+                  return synth && synth.summaryHeadline !== "No new catalysts detected";
+                });
+                const quietTickers = watchlist.filter(t => !activeAlertTickers.includes(t));
+
+                return (
+                  <div className="dashboard-signals">
+                    {/* Active Alerts */}
+                    <div className="active-alerts-section">
+                      <h2 className="section-title">🚨 Active Shocks & Alerts</h2>
+                      {watchlist.length === 0 ? (
+                        <div className="glass" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                          <h3>Watchlist is empty</h3>
+                          <p style={{ marginTop: '0.5rem' }}>Add tickers in the left sidebar to start monitoring signals.</p>
+                        </div>
+                      ) : activeAlertTickers.length === 0 ? (
+                        <div className="glass" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                          No active breaking news alerts. Monitor quiet watchlist below.
+                        </div>
+                      ) : (
+                        <div className="dashboard-grid">
+                          {activeAlertTickers.map(ticker => {
+                            const tickerSynthesis = runResult?.tickerSyntheses?.[ticker];
+                            const influence = tickerSynthesis?.overallPossibleInfluence || 'unclear';
+                            const headline = tickerSynthesis?.summaryHeadline || 'No new catalysts detected';
+                            
+                            // Find relative time of the last catalyst
+                            const bucket = runResult?.tickerBuckets?.[ticker];
+                            const allEvents = [...(bucket?.directEvents || []), ...(bucket?.crossImpactEvents || [])];
+                            
+                            let timeStr = '';
+                            if (allEvents.length > 0) {
+                              const firstEvt = allEvents[0];
+                              const ts = getEventTimestamp(firstEvt.sourceArticleIds);
+                              if (ts) {
+                                timeStr = formatRelativeTime(ts);
+                              }
+                            }
+
+                            const influenceIcons = {
+                              positive: '▲',
+                              negative: '▼',
+                              mixed: '◆',
+                              unclear: '—'
+                            };
+
+                            return (
+                              <div 
+                                key={ticker} 
+                                className={`dashboard-card active-alert-card glow-${influence}`}
+                                onClick={() => setActiveTicker(ticker)}
+                              >
+                                <div className="dashboard-card-header">
+                                  <div>
+                                    <div className="dashboard-card-ticker">{ticker}</div>
+                                    <div className="dashboard-card-company">
+                                      {(() => {
+                                        const node = graphData.nodes.find(n => n.nodeType === 'ticker' && n.ticker === ticker);
+                                        return node ? node.name : 'Public Company';
+                                      })()}
+                                    </div>
+                                  </div>
+                                  
+                                  <span className={`dashboard-card-signal-badge ${influence}`}>
+                                    <span style={{ fontSize: '0.8rem', lineHeight: 1, marginRight: '0.15rem' }}>
+                                      {influenceIcons[influence]}
+                                    </span>
+                                    <span>{influence}</span>
+                                  </span>
+                                </div>
+                                
+                                <div className="dashboard-card-headline">
+                                  {headline}
+                                </div>
+                                
+                                <div className="dashboard-card-footer">
+                                  <span className="dashboard-card-time">
+                                    <Clock size={11} style={{ marginRight: '0.25rem', verticalAlign: 'middle', display: 'inline' }} />
+                                    {timeStr ? `Updated ${timeStr}` : 'No recent update'}
+                                  </span>
+                                  <span className="dashboard-card-action">
+                                    View Briefing →
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Quiet Tickers */}
+                    {quietTickers.length > 0 && (
+                      <div className="quiet-watchlist-section">
+                        <h2 className="section-title">⚪ Quiet Watchlist</h2>
+                        <table className="quiet-watchlist-table">
+                          <thead>
+                            <tr>
+                              <th>Ticker</th>
+                              <th>Company Name</th>
+                              <th>Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {quietTickers.map(ticker => {
+                              const tickerSynthesis = runResult?.tickerSyntheses?.[ticker];
+                              const influence = tickerSynthesis?.overallPossibleInfluence || 'unclear';
+                              return (
+                                <tr key={ticker} onClick={() => setActiveTicker(ticker)}>
+                                  <td className="quiet-row-ticker">{ticker}</td>
+                                  <td className="quiet-row-company">
+                                    {(() => {
+                                      const node = graphData.nodes.find(n => n.nodeType === 'ticker' && n.ticker === ticker);
+                                      return node ? node.name : (
+                                        ticker === 'AAPL' ? 'Apple Inc.' :
+                                        ticker === 'MSFT' ? 'Microsoft Corp.' :
+                                        ticker === 'NVDA' ? 'Nvidia Corp.' :
+                                        ticker === 'TSM' ? 'TSMC' :
+                                        ticker === 'DAL' ? 'Delta Air Lines' : 'Public Company'
+                                      );
+                                    })()}
+                                  </td>
+                                  <td>
+                                    <span className="quiet-row-badge">
+                                      {influence === 'unclear' ? 'no change' : influence}
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Right Column: Global Active Story Ledger */}
+              {iteration > 1 && (
+                <div className="dashboard-ledger glass">
+                  <div className="dashboard-ledger-header">
+                    <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
+                      <Database size={14} style={{ color: 'var(--accent-purple)' }} />
+                      Active Story Ledger (Global)
+                    </h2>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      {ledgerEntries.length} threads
+                    </span>
+                  </div>
+                  <div className="dashboard-ledger-list">
+                    {ledgerEntries.length > 0 ? (
+                      ledgerEntries.map(entry => (
+                        <div key={entry.catalystId} className="ledger-list-card">
+                          <div className="ledger-card-header">
+                            <span className="ledger-card-ticker">{entry.ticker}</span>
+                            <span className="ledger-card-type">{entry.eventType}</span>
+                          </div>
+                          <div className="ledger-card-summary">{entry.canonicalSummary}</div>
+                          <div className="ledger-card-footer">
+                            <span>Facts: {entry.hardFactsSeen.length}</span>
+                            <span>First seen: {formatRelativeTime(entry.firstSeenAt)}</span>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="ledger-list-empty">
+                        No active story threads in memory ledger.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           ) : (
+            /* ==========================================================
+               View B: TICKER DETAILS WORKSPACE
+               ========================================================== */
             <>
-              {/* Ticker Synthesis Details */}
               {(() => {
                 const synthesis = getActiveSynthesis();
                 const bucket = getActiveBucket();
@@ -647,154 +1091,356 @@ export default function App() {
                 const influenceColor = synthesis.overallPossibleInfluence;
                 const hasCatalysts = synthesis.summaryHeadline !== "No new catalysts detected";
 
-                return (
-                  <div className="glass synthesis-card">
-                    <div className="synthesis-header">
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          <span className={`iteration-indicator it${iteration}`}>Iteration {iteration}</span>
-                          <span className={`badge ${hasCatalysts ? influenceColor : 'unclear'}`}>
-                            {hasCatalysts ? synthesis.overallPossibleInfluence : 'no catalysts'}
-                          </span>
-                          <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text-secondary)' }}>
-                            Confidence: {synthesis.confidence}
-                          </span>
-                        </div>
-                        <h2 style={{ marginTop: '0.5rem' }}>{synthesis.summaryHeadline}</h2>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Ticker Focus: {activeTicker}</span>
-                      </div>
-                      
-                      {bucket && bucket.suppressedDuplicateCount > 0 && (
-                        <div className="badge" style={{ background: 'rgba(168, 85, 247, 0.12)', color: 'var(--accent-purple)', borderColor: 'rgba(168, 85, 247, 0.2)' }}>
-                          {bucket.suppressedDuplicateCount} duplicates suppressed
-                        </div>
-                      )}
-                    </div>
+                // Gather and filter supporting events
+                const allEvents = [...bucket.directEvents, ...bucket.crossImpactEvents];
+                
+                // Filter out cross-impact events from feeds if iteration < 3
+                const filteredAllEvents = iteration < 3 
+                  ? allEvents.filter(e => !bucket.crossImpactEvents.find(c => c.eventId === e.eventId))
+                  : allEvents;
 
-                    <div className="synthesis-summary">
-                      {synthesis.situationSummary}
-                    </div>
+                // Helper to get score for sorting
+                const getCombinedScore = (evt: EventEntry) => {
+                  const ts = getEventTimestamp(evt.sourceArticleIds);
+                  const timeMs = ts ? new Date(ts).getTime() : 0;
+                  const now = scenarioId === 'live' ? Date.now() : new Date('2026-05-28T17:25:00Z').getTime();
+                  const ageMinutes = Math.max(0, (now - timeMs) / 60000);
+                  
+                  // Find significance from synthesis mainCatalysts
+                  const catalystInfo = synthesis.mainCatalysts?.find((c: any) => c.eventId === evt.eventId);
+                  const significance = catalystInfo ? (catalystInfo.significance || 5) : 3;
+                  
+                  return (significance * 10) - (ageMinutes * 0.5);
+                };
 
-                    {/* Columns: Uncertainties & Watch Items */}
-                    <div className="synthesis-details-grid">
-                      <div className="details-column">
-                        <h3>🔑 Uncertainties / Open Risks</h3>
-                        <ul className="details-list">
-                          {synthesis.uncertainties.map((u, i) => (
-                            <li key={i}>{u}</li>
-                          ))}
-                        </ul>
-                      </div>
+                // Merge and sort events
+                const sortedEvents = [...filteredAllEvents].sort((a, b) => getCombinedScore(b) - getCombinedScore(a));
 
-                      <div className="details-column">
-                        <h3>👀 Trader Watchlist Items</h3>
-                        <ul className="details-list">
-                          {synthesis.watchItems.map((wi, i) => (
-                            <li key={i}>{wi}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-
-                    {/* Compliance Disclaimer */}
-                    <div className="compliance-disclaimer">
-                      <ShieldAlert size={16} style={{ color: 'var(--accent-orange)', flexShrink: 0 }} />
-                      <p>{synthesis.complianceDisclaimer || "Grounded information only. Not investment advice."}</p>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* Supporting Event Cards List */}
-              {(() => {
-                const bucket = getActiveBucket();
-                if (!bucket || (!bucket.directEvents.length && !bucket.crossImpactEvents.length)) return null;
+                const activeTickerLedger = ledgerEntries.filter(l => l.ticker === activeTicker);
 
                 return (
-                  <div className="catalysts-section">
-                    <h2 className="section-title">Supporting News Events (Catalysts)</h2>
-                    <div className="catalysts-grid">
-                      {/* Direct Events */}
-                      {bucket.directEvents.map((evt) => (
-                        <div key={evt.eventId} className="glass catalyst-card">
-                          <div className="catalyst-card-header">
-                            <span className="badge" style={{ borderColor: 'rgba(168, 85, 247, 0.3)', color: 'var(--accent-purple)' }}>Direct Company News</span>
-                            <span className={`badge ${evt.possibleDirectionalPressure}`}>{evt.possibleDirectionalPressure}</span>
-                          </div>
-                          <div className="catalyst-title">{evt.headline}</div>
-                          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
-                            {evt.eventSummary}
-                          </p>
-                          <div className="catalyst-fact-box">
-                            <div className="fact-title">Hard Facts Grounded in Text:</div>
-                            {evt.hardFacts.map((fact, index) => (
-                              <div key={index} className="catalyst-fact">• {fact}</div>
-                            ))}
+                  <div className="ticker-detail-split">
+                    {/* Left Column: Ticker Synthesis Briefing */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', minWidth: 0 }}>
+                      <div className="glass synthesis-card compact-synthesis-strip">
+                        <div className="compact-synthesis-header" style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem', marginBottom: '0.5rem' }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+                            <span className={`iteration-indicator it${iteration}`}>Iteration {iteration}</span>
+                            <span className={`badge ${hasCatalysts ? influenceColor : 'unclear'}`}>
+                              {hasCatalysts ? synthesis.overallPossibleInfluence : 'no catalysts'}
+                            </span>
+                            <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text-secondary)', display: 'inline-flex' }}>
+                              Confidence: {synthesis.confidence}
+                            </span>
                           </div>
                         </div>
-                      ))}
 
-                      {/* Cross-Impact Events */}
-                      {bucket.crossImpactEvents.map((evt) => {
-                        const isGraphHovered = selectedCatalystPath && selectedCatalystPath.join(',') === evt.impactPath?.join(',');
-                        
-                        return (
-                          <div 
-                            key={evt.eventId} 
-                            className="glass catalyst-card"
-                            style={{ 
-                              borderColor: isGraphHovered ? 'var(--accent-cyan)' : 'var(--border-color)',
-                              boxShadow: isGraphHovered ? '0 0 15px rgba(6, 182, 212, 0.15)' : 'none',
-                              transition: 'all 0.2s'
-                            }}
-                            onMouseEnter={() => evt.impactPath && setSelectedCatalystPath(evt.impactPath)}
-                            onMouseLeave={() => setSelectedCatalystPath(null)}
-                          >
-                            <div className="catalyst-card-header">
-                              <span className="badge" style={{ borderColor: 'rgba(6, 182, 212, 0.3)', color: 'var(--accent-cyan)' }}>Cross-Impact Event (Indirect)</span>
-                              <span className={`badge ${evt.possibleDirectionalPressure}`}>{evt.possibleDirectionalPressure}</span>
-                            </div>
-                            <div className="catalyst-title">{evt.headline}</div>
-                            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
-                              {evt.eventSummary}
-                            </p>
-                            
-                            <div className="catalyst-fact-box">
-                              <div className="fact-title">Hard Facts Grounded in Text:</div>
-                              {evt.hardFacts.map((fact, index) => (
-                                <div key={index} className="catalyst-fact">• {fact}</div>
-                              ))}
-                            </div>
+                        <h2 style={{ fontSize: '1.3rem', fontWeight: 800, margin: '0.25rem 0 0.5rem 0', color: 'var(--text-primary)' }}>
+                          {synthesis.summaryHeadline}
+                        </h2>
 
-                            {/* Causal Impact Path mapping from Exposure Graph */}
-                            {evt.impactPath && (
-                              <div>
-                                <div className="fact-title" style={{ marginTop: '0.75rem', marginBottom: '0.25rem' }}>Exposure Chain Traversed:</div>
-                                <div className="impact-path-display">
-                                  {evt.impactPath.map((step, idx) => {
-                                    const isFirst = idx === 0;
-                                    const isLast = idx === evt.impactPath!.length - 1;
-                                    return (
-                                      <React.Fragment key={idx}>
-                                        <span className={`path-step ${isFirst ? 'source' : ''} ${isLast ? 'ticker' : ''}`}>
-                                          {step}
-                                        </span>
-                                        {!isLast && <span className="path-arrow">→</span>}
-                                      </React.Fragment>
-                                    );
-                                  })}
-                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
-                                    Path Score: {evt.pathConfidence}
+                        <div className="synthesis-content-expanded" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: 0 }}>
+                          <div className="synthesis-summary" style={{ fontSize: '0.92rem', lineHeight: '1.55', background: 'rgba(255,255,255,0.01)' }}>
+                            {(() => {
+                              const text = synthesis.situationSummary || "";
+                              const sentences = text.match(/[^.!?]+[.!?]+(\s|$)/g) || [text];
+                              if (sentences.length <= 2) {
+                                return <span>{text}</span>;
+                              }
+                              const shortPart = sentences.slice(0, 2).join("").trim();
+                              const restPart = sentences.slice(2).join("").trim();
+                              
+                              if (summaryDetailExpanded) {
+                                return (
+                                  <span>
+                                    {shortPart} {restPart}
+                                    <span className="summary-toggle-link" onClick={() => setSummaryDetailExpanded(false)}>
+                                      [Show Less]
+                                    </span>
                                   </span>
-                                </div>
-                                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem', fontStyle: 'italic' }}>
-                                  <strong>Causal path:</strong> {evt.reasonForRouting}
-                                </p>
-                              </div>
-                            )}
+                                );
+                              } else {
+                                return (
+                                  <span>
+                                    {shortPart}...
+                                    <span className="summary-toggle-link" onClick={() => setSummaryDetailExpanded(true)}>
+                                      [Show More]
+                                    </span>
+                                  </span>
+                                );
+                              }
+                            })()}
                           </div>
-                        );
-                      })}
+
+                          {/* Columns: Uncertainties & Watch Items */}
+                          <div className="synthesis-details-grid" style={{ gridTemplateColumns: '1fr', gap: '1rem' }}>
+                            <div className="details-column">
+                              <h3 style={{ fontSize: '0.78rem' }}>🔑 Uncertainties / Open Risks</h3>
+                              <ul className="details-list" style={{ paddingLeft: '0.25rem' }}>
+                                {synthesis.uncertainties.map((u, i) => (
+                                  <li key={i} style={{ fontSize: '0.82rem' }}>{u}</li>
+                                ))}
+                              </ul>
+                            </div>
+
+                            <div className="details-column">
+                              <h3 style={{ fontSize: '0.78rem' }}>👀 Trader Watchlist Items</h3>
+                              <ul className="details-list" style={{ paddingLeft: '0.25rem' }}>
+                                {synthesis.watchItems.map((wi, i) => (
+                                  <li key={i} style={{ fontSize: '0.82rem' }}>{wi}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          </div>
+
+                          {/* Exposure Graph Button (Iteration 3 only) */}
+                          {iteration === 3 && (
+                            <button
+                              onClick={() => setGraphModalOpen(true)}
+                              className="btn-secondary"
+                              style={{ padding: '0.45rem 0.9rem', display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem', marginTop: '0.25rem', width: 'fit-content' }}
+                              title="Open full-screen exposure graph"
+                            >
+                              <Network size={14} /> View Causal Exposure Graph
+                            </button>
+                          )}
+
+                          {/* Compliance Disclaimer */}
+                          <div className="compliance-disclaimer" style={{ marginTop: '0.5rem', padding: '0.6rem 0.75rem' }}>
+                            <ShieldAlert size={14} style={{ color: 'var(--accent-orange)', flexShrink: 0 }} />
+                            <p style={{ fontSize: '0.7rem' }}>{synthesis.complianceDisclaimer || "Grounded information only. Not investment advice."}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right Column: Unified Live Feed + Structured Memory Index */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', minWidth: 0 }}>
+                      
+                      {/* Unified Live Feed */}
+                      <div className="catalysts-section">
+                        <h3 className="feed-type-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <span className="pulsing-dot" style={{ color: iteration === 1 ? 'var(--accent-blue)' : iteration === 2 ? 'var(--accent-purple)' : 'var(--accent-cyan)' }} />
+                            ⚡ Live Updates & Catalyst Feed
+                          </span>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'none', fontWeight: 'normal' }}>
+                            {sortedEvents.length} events sorted by recency & significance
+                          </span>
+                        </h3>
+
+                        {sortedEvents.length > 0 ? (
+                          <div className="catalysts-grid">
+                            {sortedEvents.map((evt) => {
+                              const isCross = bucket.crossImpactEvents.find(c => c.eventId === evt.eventId);
+                              const isGraphHovered = selectedCatalystPath && selectedCatalystPath.join(',') === evt.impactPath?.join(',');
+                              const ts = getEventTimestamp(evt.sourceArticleIds);
+                              
+                              const catId = getEventCatalystId(evt.eventId);
+                              const elId = catId ? `evt-${catId}` : `evt-${evt.eventId}`;
+
+                              const ledgerEntry = ledgerEntries.find(l => l.catalystId === catId);
+                              
+                              // Check decision: new vs update
+                              const decision = iteration === 1 ? 'new' : getEventDecision(evt.eventId);
+                              const isUpdate = decision === 'update';
+
+                              // Find significance rating for badge
+                              const catalystInfo = synthesis.mainCatalysts?.find((c: any) => c.eventId === evt.eventId);
+                              const significance = catalystInfo ? (catalystInfo.significance || 5) : 3;
+
+                              // Segment facts: new vs previous
+                              const newFacts = evt.hardFacts;
+                              const prevFacts = (isUpdate && ledgerEntry)
+                                ? ledgerEntry.hardFactsSeen.filter((f: string) => !newFacts.includes(f))
+                                : [];
+
+                              return (
+                                <div 
+                                  id={elId}
+                                  key={evt.eventId} 
+                                  className={`glass catalyst-card ${isUpdate ? 'ongoing-card' : `fresh-card accent-${iteration}`}`}
+                                  style={isCross ? { 
+                                    borderColor: isGraphHovered ? 'var(--accent-cyan)' : 'var(--border-color)',
+                                    boxShadow: isGraphHovered ? '0 0 15px rgba(6, 182, 212, 0.15)' : 'none',
+                                    transition: 'all 0.2s'
+                                  } : {}}
+                                  onMouseEnter={() => isCross && evt.impactPath && setSelectedCatalystPath(evt.impactPath)}
+                                  onMouseLeave={() => isCross && setSelectedCatalystPath(null)}
+                                >
+                                  <div className="catalyst-card-header" style={{ paddingRight: '12rem' }}>
+                                    <span className="badge" style={{ 
+                                      borderColor: isCross ? 'rgba(6, 182, 212, 0.3)' : isUpdate ? 'rgba(255,255,255,0.1)' : 'rgba(168, 85, 247, 0.3)', 
+                                      color: isCross ? 'var(--accent-cyan)' : isUpdate ? 'var(--text-secondary)' : 'var(--accent-purple)' 
+                                    }}>
+                                      {isCross 
+                                        ? (isUpdate ? 'Ongoing Cross-Impact' : 'Cross-Impact Catalyst') 
+                                        : (isUpdate ? 'Ongoing Direct Thread' : 'Direct Catalyst')}
+                                    </span>
+                                    <span className={`badge ${evt.possibleDirectionalPressure}`}>{evt.possibleDirectionalPressure}</span>
+                                  </div>
+
+                                  <div style={{ position: 'absolute', top: '1.25rem', right: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    {/* Significance Badge */}
+                                    <span className="badge" style={{
+                                      background: significance >= 7 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(255, 255, 255, 0.05)',
+                                      color: significance >= 7 ? 'var(--accent-red)' : 'var(--text-secondary)',
+                                      border: `1px solid ${significance >= 7 ? 'rgba(239, 68, 68, 0.25)' : 'var(--border-color)'}`,
+                                      fontSize: '0.65rem',
+                                      padding: '0.1rem 0.4rem',
+                                      fontWeight: 800
+                                    }}>
+                                      Sig: {significance}/10
+                                    </span>
+
+                                    {/* Recency Badge */}
+                                    <span className={isUpdate ? 'ongoing-badge' : 'fresh-badge'} style={{ position: 'static', margin: 0 }}>
+                                      {!isUpdate && <span className="pulsing-dot" />}
+                                      {ts ? formatRelativeTime(ts) : 'breaking'}
+                                    </span>
+                                  </div>
+
+                                  <div className="catalyst-title" style={{ marginTop: '0.35rem' }}>{evt.headline}</div>
+                                  <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+                                    {evt.eventSummary}
+                                  </p>
+
+                                  {isUpdate ? (
+                                    /* Story Timeline progression for Updates */
+                                    <div className="storyline-timeline">
+                                      <div className="timeline-title">Story Timeline & Fact Progression</div>
+                                      <div className="timeline-facts-box">
+                                        {/* New Facts */}
+                                        {newFacts.map((fact, index) => (
+                                          <div key={`new-${index}`} className="timeline-node new-fact">
+                                            <span style={{ fontSize: '0.62rem', textTransform: 'uppercase', background: 'rgba(168, 85, 247, 0.15)', color: 'var(--accent-purple)', padding: '0.05rem 0.25rem', borderRadius: '3px', marginRight: '0.35rem' }}>New Fact</span>
+                                            {fact}
+                                          </div>
+                                        ))}
+                                        
+                                        {/* Previous Facts (Dimmed) */}
+                                        {prevFacts.map((fact: string, index: number) => (
+                                          <div key={`prev-${index}`} className="timeline-node" style={{ opacity: 0.55 }}>
+                                            <span style={{ fontSize: '0.62rem', textTransform: 'uppercase', background: 'rgba(255, 255, 255, 0.05)', color: 'var(--text-muted)', padding: '0.05rem 0.25rem', borderRadius: '3px', marginRight: '0.35rem' }}>Priced In</span>
+                                            {fact}
+                                          </div>
+                                        ))}
+                                      </div>
+                                      
+                                      {ledgerEntry && (
+                                        <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'flex', gap: '1rem', marginTop: '0.25rem', paddingLeft: '0.75rem' }}>
+                                          <span>First Seen: {formatRelativeTime(ledgerEntry.firstSeenAt)}</span>
+                                          <span>Total reports: {ledgerEntry.memberArticleIds.length}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    /* Hard facts for new news cards */
+                                    <div className="catalyst-fact-box">
+                                      <div className="fact-title">Hard Facts Grounded in Text:</div>
+                                      {evt.hardFacts.map((fact, index) => (
+                                        <div key={index} className="catalyst-fact">• {fact}</div>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  {isCross && evt.impactPath && (
+                                    <div style={{ marginTop: '1rem' }}>
+                                      <div className="fact-title" style={{ marginBottom: '0.25rem' }}>Exposure Chain Traversed:</div>
+                                      <div className="impact-path-display">
+                                        {evt.impactPath.map((step, idx) => {
+                                          const isFirst = idx === 0;
+                                          const isLast = idx === evt.impactPath!.length - 1;
+                                          return (
+                                            <React.Fragment key={idx}>
+                                              <span className={`path-step ${isFirst ? 'source' : ''} ${isLast ? 'ticker' : ''}`}>
+                                                {step}
+                                              </span>
+                                              {!isLast && <span className="path-arrow">→</span>}
+                                            </React.Fragment>
+                                          );
+                                        })}
+                                        {!isUpdate && (
+                                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                                            Path Score: {evt.pathConfidence}
+                                          </span>
+                                        )}
+                                      </div>
+                                      {!isUpdate && evt.reasonForRouting && (
+                                        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem', fontStyle: 'italic' }}>
+                                          <strong>Causal path:</strong> {evt.reasonForRouting}
+                                        </p>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                            No catalysts detected in this run.
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Active Memory Index (Database state - shown in Iterations 2 & 3) */}
+                      {iteration > 1 && activeTickerLedger.length > 0 && (
+                        <section className="glass panel-card">
+                          <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
+                            <Database size={13} style={{ color: 'var(--accent-purple)' }} />
+                            Active Memory Index ({activeTickerLedger.length} stories in local DB)
+                          </h2>
+                          <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>
+                            Current state of local vector database memory. Click active updates to scroll to card, or background entries to expand hard facts inline.
+                          </p>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '400px', overflowY: 'auto', paddingRight: '0.25rem' }}>
+                            {activeTickerLedger.map((entry) => {
+                              const isUpdatedInRun = sortedEvents.some(e => getEventCatalystId(e.eventId) === entry.catalystId);
+                              const isSelected = selectedBackgroundStory === entry.catalystId;
+                              
+                              return (
+                                <div 
+                                  key={entry.catalystId} 
+                                  className={`memory-index-row ${isUpdatedInRun ? 'status-active' : 'status-background'}`}
+                                  onClick={() => {
+                                    if (isUpdatedInRun) {
+                                      const el = document.getElementById(`evt-${entry.catalystId}`);
+                                      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    } else {
+                                      setSelectedBackgroundStory(isSelected ? null : entry.catalystId);
+                                    }
+                                  }}
+                                >
+                                  <div className="index-row-header">
+                                    <span className="index-row-type">{entry.eventType}</span>
+                                    <span className={`index-row-status-dot ${isUpdatedInRun ? 'active' : 'background'}`} />
+                                  </div>
+                                  <div className="index-row-title">{entry.canonicalSummary}</div>
+                                  <div className="index-row-footer">
+                                    <span>First seen: {formatRelativeTime(entry.firstSeenAt)}</span>
+                                    <span>Facts: {entry.hardFactsSeen.length}</span>
+                                  </div>
+
+                                  {!isUpdatedInRun && isSelected && (
+                                    <div className="index-row-expanded" onClick={(e) => e.stopPropagation()}>
+                                      <div className="expanded-summary-title">Full Grounded Memory State:</div>
+                                      <div className="expanded-facts-list">
+                                        {entry.hardFactsSeen.map((fact: string, idx: number) => (
+                                          <div key={idx} className="expanded-fact-item">• {fact}</div>
+                                        ))}
+                                      </div>
+                                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                                        First seen: {formatRelativeTime(entry.firstSeenAt)} | Reports: {entry.memberArticleIds.length}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      )}
                     </div>
                   </div>
                 );
@@ -802,216 +1448,127 @@ export default function App() {
             </>
           )}
         </main>
-
-        {/* Right Sidebar - Exposure Graph & Observability Panel */}
-        <aside className="right-panel">
-          
-          {/* Exposure Graph Viewer Card */}
-          <section className="glass panel-card">
-            <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.35rem' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                <Network size={14} /> Causal Exposure Graph
-              </span>
-              <button
-                onClick={() => setGraphModalOpen(true)}
-                className="btn-secondary"
-                style={{ padding: '0.2rem 0.45rem', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem' }}
-                title="Open full-screen graph"
-              >
-                <Maximize2 size={12} /> Open
-              </button>
-            </h2>
-            <div className="graph-container" style={{ cursor: graphData.nodes.length > 0 ? 'pointer' : 'default' }} onClick={() => graphData.nodes.length > 0 && setGraphModalOpen(true)}>
-              <GraphView graphData={graphData} width={380} height={250} scale={1} selectedCatalystPath={selectedCatalystPath} />
-            </div>
-            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textAlign: 'center', marginTop: '-0.3rem' }}>
-              Click to open. Hover over indirect cards to highlight impact pathways.
-            </div>
-          </section>
-
-          {/* Trace Panel Card */}
-          <section className="glass panel-card">
-            <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              <Cpu size={14} /> Observability Traces
-            </h2>
-
-            <div className="trace-panel-body">
-              {/* Tracing Status */}
-              <div className="trace-status">
-                <span className="metric-label">Arize Phoenix Tracing:</span>
-                <span className="status-indicator">
-                  <div className={phoenixStatus.running ? 'pulse-dot' : ''} style={{ background: phoenixStatus.running ? 'var(--accent-green)' : 'var(--accent-red)' }} />
-                  {phoenixStatus.running ? 'ACTIVE' : 'OFFLINE'}
-                </span>
-              </div>
-
-              {phoenixStatus.running && (
-                <a 
-                  href={phoenixStatus.dashboardUrl}
-                  target="_blank" 
-                  rel="noreferrer"
-                  className="btn-secondary"
-                  style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.4rem', textDecoration: 'none', padding: '0.45rem', fontSize: '0.85rem' }}
-                >
-                  <span>Open Phoenix Dashboard</span>
-                  <ExternalLink size={13} />
-                </a>
-              )}
-
-              {/* Stats of last run */}
-              <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                <h3 className="section-title" style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>Workflow Metrics (Last Run)</h3>
-                
-                <div className="metric-row">
-                  <span className="metric-label">Articles Ingested</span>
-                  <span className="metric-value">{runResult ? runResult.articlesCount : '-'}</span>
-                </div>
-                
-                <div className="metric-row">
-                  <span className="metric-label">Canonical Extractions</span>
-                  <span className="metric-value">{runResult ? runResult.eventsCount : '-'}</span>
-                </div>
-                
-                <div className="metric-row">
-                  <span className="metric-label">Routed Connections</span>
-                  <span className="metric-value">{runResult ? runResult.routedCount : '-'}</span>
-                </div>
-
-                <div className="metric-row">
-                  <span className="metric-label">Suppressed Duplicates</span>
-                  <span className="metric-value">
-                    {runResult ? Object.values(runResult.duplicateCounts).reduce((a,b) => a+b, 0) : '-'}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Ledger Memory Database Status */}
-          <section className="glass panel-card" style={{ flex: 1 }}>
-            <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              <Database size={14} /> Active Story Ledger
-            </h2>
-            <div style={{ flex: 1, overflowY: 'auto', maxHeight: '180px', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              {ledgerEntries.length > 0 ? (
-                ledgerEntries.map(entry => (
-                  <div key={entry.catalystId} style={{ fontSize: '0.75rem', padding: '0.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
-                      <span style={{ color: 'var(--accent-purple)' }}>{entry.ticker}</span>
-                      <span style={{ color: 'var(--text-secondary)' }}>{entry.eventType}</span>
-                    </div>
-                    <div style={{ color: 'var(--text-primary)', marginTop: '0.2rem', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                      {entry.canonicalSummary}
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.65rem', marginTop: '0.2rem' }}>
-                      <span>Facts: {entry.hardFactsSeen.length}</span>
-                      <span>Articles: {entry.memberArticleIds.length}</span>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center', padding: '2rem' }}>
-                  No active stories tracked in Catalyst Ledger.
-                </div>
-              )}
-            </div>
-          </section>
-
-          {/* Embeddings Memory Engine Panel */}
-          <section className="glass panel-card">
-            <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              <Cpu size={14} /> Embeddings Memory Engine
-            </h2>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-              {memoryStatus ? (
-                <>
-                  {/* Provider badge row */}
-                  <div className="metric-row" style={{ alignItems: 'flex-start' }}>
-                    <span className="metric-label">Dedup Engine</span>
-                    <span style={{
-                      fontSize: '0.72rem',
-                      fontWeight: 700,
-                      padding: '0.15rem 0.45rem',
-                      borderRadius: '4px',
-                      background: memoryStatus.isFallbackActive
-                        ? 'rgba(234, 88, 12, 0.12)'
-                        : 'rgba(6, 182, 212, 0.12)',
-                      color: memoryStatus.isFallbackActive
-                        ? 'var(--accent-orange)'
-                        : 'var(--accent-cyan)',
-                      border: `1px solid ${memoryStatus.isFallbackActive ? 'rgba(234,88,12,0.3)' : 'rgba(6,182,212,0.3)'}`
-                    }}>
-                      {memoryStatus.dedupProvider}
-                    </span>
-                  </div>
-
-                  <div className="metric-row">
-                    <span className="metric-label">Extraction LLM</span>
-                    <span className="metric-value" style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: 'var(--accent-green)' }}>{memoryStatus.llmExtractionModel}</span>
-                  </div>
-
-                  <div className="metric-row">
-                    <span className="metric-label">Synthesis LLM</span>
-                    <span className="metric-value" style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: 'var(--accent-purple)' }}>{memoryStatus.llmSynthesisModel}</span>
-                  </div>
-
-                  <div className="metric-row">
-                    <span className="metric-label">Method</span>
-                    <span className="metric-value" style={{ fontSize: '0.7rem', fontFamily: 'monospace' }}>{memoryStatus.dedupModel}</span>
-                  </div>
-
-                  {/* Separator */}
-                  <div style={{ height: '1px', background: 'var(--border-color)', margin: '0.2rem 0' }} />
-
-                  <div className="metric-row">
-                    <span className="metric-label">Cosine Sim Threshold</span>
-                    <span className="metric-value" style={{ color: 'var(--accent-purple)' }}>&ge; {memoryStatus.similarityThreshold}</span>
-                  </div>
-
-                  <div className="metric-row">
-                    <span className="metric-label">Jaccard Fact Threshold</span>
-                    <span className="metric-value" style={{ color: 'var(--accent-blue)' }}>&ge; {memoryStatus.jaccardFactThreshold}</span>
-                  </div>
-
-                  {/* Separator */}
-                  <div style={{ height: '1px', background: 'var(--border-color)', margin: '0.2rem 0' }} />
-
-                  <div className="metric-row">
-                    <span className="metric-label">Live Stories</span>
-                    <span className="metric-value">{memoryStatus.ledgerLiveEntries} / {memoryStatus.ledgerTotalEntries}</span>
-                  </div>
-
-                  <div className="metric-row">
-                    <span className="metric-label">Vectors Stored</span>
-                    <span className="metric-value" style={{ color: 'var(--accent-green)' }}>{memoryStatus.ledgerEmbeddedEntries}</span>
-                  </div>
-
-                  {memoryStatus.isFallbackActive && (
-                    <div style={{
-                      marginTop: '0.35rem',
-                      padding: '0.4rem 0.5rem',
-                      background: 'rgba(234, 88, 12, 0.08)',
-                      border: '1px solid rgba(234,88,12,0.25)',
-                      borderRadius: '5px',
-                      fontSize: '0.7rem',
-                      color: 'var(--accent-orange)',
-                      lineHeight: 1.4
-                    }}>
-                      ⚠ Local embedding model unavailable. Using deterministic lexical cosine fallback — paraphrase dedup recall is reduced.
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center', padding: '1.5rem' }}>
-                  Loading engine status...
-                </div>
-              )}
-            </div>
-          </section>
-
-        </aside>
-
       </div>
+
+      {/* Bottom Status Bar */}
+      <footer className="status-bar">
+        <div className="status-bar-left">
+          <div className="status-bar-item">
+            <span>Arize Phoenix:</span>
+            <span className="status-indicator" style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 'bold' }}>
+              <div className={phoenixStatus.running ? 'pulse-dot' : ''} style={{ width: '8px', height: '8px', borderRadius: '50%', background: phoenixStatus.running ? 'var(--accent-green)' : 'var(--accent-red)', boxShadow: phoenixStatus.running ? '0 0 8px var(--accent-green)' : 'none' }} />
+              {phoenixStatus.running ? 'ACTIVE' : 'OFFLINE'}
+            </span>
+          </div>
+          {phoenixStatus.running && phoenixStatus.dashboardUrl && (
+            <a 
+              href={phoenixStatus.dashboardUrl}
+              target="_blank" 
+              rel="noreferrer"
+              className="status-bar-link"
+            >
+              <span>Phoenix Traces</span>
+              <ExternalLink size={11} />
+            </a>
+          )}
+        </div>
+
+        {/* Workflow Metrics */}
+        <div className="status-bar-item" style={{ gap: '1rem' }}>
+          {runResult && (
+            <>
+              <span>Ingested: <strong>{runResult.articlesCount}</strong></span>
+              <span>Extractions: <strong>{runResult.eventsCount}</strong></span>
+              <span>Connections: <strong>{runResult.routedCount}</strong></span>
+              <span>Duplicates Suppressed: <strong>{Object.values(runResult.duplicateCounts).reduce((a,b) => a+b, 0)}</strong></span>
+            </>
+          )}
+        </div>
+
+        <div className="status-bar-right">
+          {/* Embeddings Memory Engine Trigger */}
+          <div 
+            className="engine-popover-trigger"
+            onClick={() => setPopoverOpen(!popoverOpen)}
+          >
+            <Cpu size={12} />
+            <span>Memory Engine: {memoryStatus?.dedupProvider || 'loading...'}</span>
+          </div>
+
+          {/* Embeddings Memory Engine Popover */}
+          {popoverOpen && (
+            <>
+              <div className="engine-popover-backdrop" onClick={() => setPopoverOpen(false)} />
+              <div className="engine-popover">
+                <div className="engine-popover-header">
+                  Embeddings Memory Engine
+                </div>
+                {memoryStatus ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.75rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="metric-label">Dedup Provider</span>
+                      <span style={{
+                        fontWeight: 700,
+                        padding: '0.1rem 0.35rem',
+                        borderRadius: '3px',
+                        background: memoryStatus.isFallbackActive ? 'rgba(234, 88, 12, 0.12)' : 'rgba(6, 182, 212, 0.12)',
+                        color: memoryStatus.isFallbackActive ? 'var(--accent-orange)' : 'var(--accent-cyan)',
+                        border: `1px solid ${memoryStatus.isFallbackActive ? 'rgba(234,88,12,0.3)' : 'rgba(6,182,212,0.3)'}`
+                      }}>{memoryStatus.dedupProvider}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="metric-label">Extraction LLM</span>
+                      <span style={{ color: 'var(--accent-green)', fontFamily: 'monospace' }}>{memoryStatus.llmExtractionModel}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="metric-label">Synthesis LLM</span>
+                      <span style={{ color: 'var(--accent-purple)', fontFamily: 'monospace' }}>{memoryStatus.llmSynthesisModel}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="metric-label">Dedup Method</span>
+                      <span>{memoryStatus.dedupModel}</span>
+                    </div>
+                    <div style={{ height: '1px', background: 'var(--border-color)', margin: '0.2rem 0' }} />
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="metric-label">Cosine Threshold</span>
+                      <span style={{ color: 'var(--accent-purple)' }}>&ge; {memoryStatus.similarityThreshold}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="metric-label">Jaccard Threshold</span>
+                      <span style={{ color: 'var(--accent-blue)' }}>&ge; {memoryStatus.jaccardFactThreshold}</span>
+                    </div>
+                    <div style={{ height: '1px', background: 'var(--border-color)', margin: '0.2rem 0' }} />
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="metric-label">Stories in Ledger</span>
+                      <span>{memoryStatus.ledgerLiveEntries} / {memoryStatus.ledgerTotalEntries}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="metric-label">Vectors Stored</span>
+                      <span style={{ color: 'var(--accent-green)' }}>{memoryStatus.ledgerEmbeddedEntries}</span>
+                    </div>
+                    {memoryStatus.isFallbackActive && (
+                      <div style={{
+                        marginTop: '0.35rem',
+                        padding: '0.4rem 0.5rem',
+                        background: 'rgba(234, 88, 12, 0.08)',
+                        border: '1px solid rgba(234,88,12,0.25)',
+                        borderRadius: '5px',
+                        fontSize: '0.7rem',
+                        color: 'var(--accent-orange)',
+                        lineHeight: 1.4
+                      }}>
+                        ⚠ Local embedding model unavailable. Using deterministic lexical cosine fallback.
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '1rem' }}>Loading engine status...</div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </footer>
 
       {/* Full-screen Exposure Graph Modal */}
       {graphModalOpen && (

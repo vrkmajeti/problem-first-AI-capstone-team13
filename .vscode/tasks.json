@@ -4,7 +4,10 @@
     {
       "label": "Install Backend Requirements",
       "type": "shell",
-      "command": "${workspaceFolder}/backend/.venv/Scripts/pip",
+      "command": "${workspaceFolder}/backend/.venv/bin/pip",
+      "windows": {
+        "command": "${workspaceFolder}/backend/.venv/Scripts/pip"
+      },
       "args": ["install", "-r", "backend/requirements.txt"],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -24,7 +27,10 @@
     {
       "label": "Run Unit Tests",
       "type": "shell",
-      "command": "${workspaceFolder}/backend/.venv/Scripts/python",
+      "command": "${workspaceFolder}/backend/.venv/bin/python",
+      "windows": {
+        "command": "${workspaceFolder}/backend/.venv/Scripts/python"
+      },
       "args": ["-m", "unittest", "backend/run_tests.py"],
       "options": {
         "cwd": "${workspaceFolder}"
