@@ -1,0 +1,24 @@
+[project]
+name = "intraday-catalyst-briefings"
+version = "0.1.0"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "langgraph",
+    "langchain-core",
+    "langchain-google-genai",
+    "langchain-openai",
+    "arize-phoenix",
+    "openinference-instrumentation-langchain",
+    "requests",
+    "python-dotenv",
+    "pydantic",
+    "numpy",
+    "fastembed",
+]
+
+[tool.pip]
+# sqlean-py (required by arize-phoenix) has no pre-built wheels for Python 3.14
+# on Windows and cannot be compiled from source due to POSIX-only C dependencies.
+# Use Python 3.11–3.13 where binary wheels are available.

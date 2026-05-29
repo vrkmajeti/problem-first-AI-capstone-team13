@@ -172,7 +172,11 @@ source backend/.venv/bin/activate
 **Install Python dependencies:**
 
 ```bash
+# macOS / Linux
 pip install -r backend/requirements.txt
+
+# Windows (avoids a sqlean-py build failure)
+pip install -r backend/requirements.txt --only-binary sqlean-py
 ```
 
 **Create your `.env` file:**

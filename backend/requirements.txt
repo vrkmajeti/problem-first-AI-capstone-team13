@@ -1,3 +1,5 @@
+# Requires Python >=3.11,<3.14
+# (sqlean-py, needed by arize-phoenix, has no wheel for Python 3.14 on Windows)
 fastapi
 uvicorn
 langgraph
