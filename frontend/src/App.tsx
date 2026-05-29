@@ -209,7 +209,8 @@ export default function App() {
   const [iteration, setIteration] = useState<number>(3);
   const [scenarioId, setScenarioId] = useState<string>('live');
   const [activeTicker, setActiveTicker] = useState<string>('dashboard');
-  const [runResult, setRunResult] = useState<RunResult | null>(null);
+  const [runResults, setRunResults] = useState<Record<number, RunResult | null>>({});
+  const runResult = runResults[iteration] || null;
   const [graphData, setGraphData] = useState<ExposureGraph>({ nodes: [], edges: [] });
   const [ledgerEntries, setLedgerEntries] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -226,6 +227,7 @@ export default function App() {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [synthesisExpanded, setSynthesisExpanded] = useState(false);
   const [selectedBackgroundStory, setSelectedBackgroundStory] = useState<string | null>(null);
+  const [summaryDetailExpanded, setSummaryDetailExpanded] = useState(false);
 
 
   // Time conversion helper
@@ -261,15 +263,11 @@ export default function App() {
     return art?.publishedAt || null;
   };
 
-  // Fetch initial configuration
+  // Removed initial load; now handled by connection manager check below
+
   useEffect(() => {
-    fetchWatchlist();
-    fetchGraph();
-    fetchGraphStatus();
     fetchLedger();
-    fetchPhoenixStatus();
-    fetchMemoryStatus();
-  }, []);
+  }, [iteration]);
 
   // Poll expansion status while any ticker is pending/running, refreshing the graph as
   // edges land. The effect re-arms on each graphStatus change and stops once all settle.
@@ -357,9 +355,27 @@ export default function App() {
     return graphData.nodes.some(n => n.nodeId === `ticker_${ticker}`) ? 'ready' : 'none';
   };
 
+  const fetchResults = async () => {
+    try {
+      const res = await fetch('/api/results');
+      if (res.ok) {
+        const data = await res.json();
+        if (data) {
+          const formatted: Record<number, RunResult> = {};
+          Object.entries(data).forEach(([k, v]) => {
+            formatted[Number(k)] = v as RunResult;
+          });
+          setRunResults(formatted);
+        }
+      }
+    } catch (e) {
+      console.error('Error fetching run results', e);
+    }
+  };
+
   const fetchLedger = async () => {
     try {
-      const res = await fetch('/api/ledger');
+      const res = await fetch(`/api/ledger?iteration=${iteration}`);
       const data = await res.json();
       setLedgerEntries(data);
     } catch (e) {
@@ -385,6 +401,90 @@ export default function App() {
     } catch (e) {
       console.error('Error fetching memory status', e);
     }
+  };
+
+  const [connectionState, setConnectionState] = useState<'connecting' | 'connected' | 'failed'>('connecting');
+  const [retryCount, setRetryCount] = useState(0);
+
+  const checkConnectionDirect = async (): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/watchlist');
+      if (res.ok) {
+        const data = await res.json();
+        setWatchlist(data.tickers);
+        if (data.tickers.length > 0 && !activeTicker) {
+          setActiveTicker('dashboard');
+        }
+        // Fetch all other data on successful connection
+        fetchGraph();
+        fetchGraphStatus();
+        fetchResults();
+        fetchPhoenixStatus();
+        fetchMemoryStatus();
+        setConnectionState('connected');
+        return true;
+      }
+    } catch (e) {
+      console.warn('Backend connection attempt failed:', e);
+    }
+    return false;
+  };
+
+  useEffect(() => {
+    let intervalId: any;
+    let elapsed = 0;
+
+    const runCheck = async () => {
+      const success = await checkConnectionDirect();
+      if (!success) {
+        intervalId = setInterval(async () => {
+          elapsed += 10;
+          if (elapsed >= 90) { // 1.5 minutes
+            setConnectionState('failed');
+            clearInterval(intervalId);
+          } else {
+            setRetryCount(c => c + 1);
+            const ok = await checkConnectionDirect();
+            if (ok) {
+              clearInterval(intervalId);
+            }
+          }
+        }, 10000);
+      }
+    };
+
+    runCheck();
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, []);
+
+  const handleManualRetry = () => {
+    setConnectionState('connecting');
+    setRetryCount(0);
+    let elapsed = 0;
+
+    const runCheck = async () => {
+      const success = await checkConnectionDirect();
+      if (!success) {
+        const intervalId = setInterval(async () => {
+          elapsed += 10;
+          if (elapsed >= 90) {
+            setConnectionState('failed');
+            clearInterval(intervalId);
+          } else {
+            setRetryCount(c => c + 1);
+            const ok = await checkConnectionDirect();
+            if (ok) {
+              clearInterval(intervalId);
+            }
+          }
+        }, 10000);
+      }
+    };
+
+    runCheck();
   };
 
   const addTicker = async (e: React.FormEvent) => {
@@ -431,9 +531,9 @@ export default function App() {
   };
 
   const clearLedgerMemory = async () => {
-    if (!confirm('Are you sure you want to clear the Catalyst Ledger memory? This will reset all story updates.')) return;
+    if (!confirm('Are you sure you want to clear the Catalyst Ledger memory for this iteration? This will reset all story updates.')) return;
     try {
-      const res = await fetch('/api/ledger/clear', { method: 'POST' });
+      const res = await fetch(`/api/ledger/clear?iteration=${iteration}`, { method: 'POST' });
       await res.json();
       fetchLedger();
       alert('Ledger cleared successfully!');
@@ -460,7 +560,10 @@ export default function App() {
         throw new Error(err.detail || 'Pipeline execution failed');
       }
       const data = await res.json();
-      setRunResult(data);
+      setRunResults(prev => ({
+        ...prev,
+        [iteration]: data
+      }));
       fetchLedger();
       fetchGraph();
       fetchMemoryStatus();
@@ -502,6 +605,53 @@ export default function App() {
       </span>
     );
   };
+
+  if (connectionState === 'connecting') {
+    return (
+      <div className="connection-overlay">
+        <div className="glass connection-card">
+          <div className="connection-glow" />
+          <div className="pulse-loader">
+            <Cpu className="pulse-icon" size={48} />
+          </div>
+          <h2>⚡ Connecting to Cross-Impact Engine</h2>
+          <p className="connection-status">
+            The backend server at <code>http://localhost:8000</code> is still loading or offline.
+          </p>
+          <div className="polling-indicator">
+            <span className="dot-pulse" />
+            <span>Retrying connection (Attempt {retryCount + 1})...</span>
+          </div>
+          <div className="progress-bar-container">
+            <div className="progress-bar-fill" style={{ width: `${(retryCount / 9) * 100}%` }} />
+          </div>
+          <span className="connection-info">Polling will stop automatically after 1.5 minutes.</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (connectionState === 'failed') {
+    return (
+      <div className="connection-overlay">
+        <div className="glass connection-card connection-failed-card">
+          <div className="connection-failed-glow" />
+          <AlertCircle className="failed-icon" size={48} />
+          <h2>❌ Server Offline / Connection Failed</h2>
+          <p className="connection-status">
+            Unable to establish a connection to the backend server at <code>http://localhost:8000</code> after 1.5 minutes of polling.
+          </p>
+          <p className="connection-instructions">
+            Please make sure that the backend FastAPI server is running (e.g. via <code>uvicorn backend.main:app --reload</code>).
+          </p>
+          <button className="btn-primary retry-btn" onClick={handleManualRetry}>
+            <RotateCcw size={16} style={{ marginRight: '0.4rem' }} />
+            Retry Connection
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-container">
@@ -944,35 +1094,36 @@ export default function App() {
                 // Gather and filter supporting events
                 const allEvents = [...bucket.directEvents, ...bucket.crossImpactEvents];
                 
-                // In iteration 1, everything is treated as "fresh"
-                const freshEvents = iteration === 1 
-                  ? allEvents 
-                  : allEvents.filter(e => getEventDecision(e.eventId) !== 'update');
-                  
-                const ongoingEvents = iteration === 1 
-                  ? [] 
-                  : allEvents.filter(e => getEventDecision(e.eventId) === 'update');
-
                 // Filter out cross-impact events from feeds if iteration < 3
-                const displayFreshEvents = iteration < 3 
-                  ? freshEvents.filter(e => !bucket.crossImpactEvents.find(c => c.eventId === e.eventId))
-                  : freshEvents;
+                const filteredAllEvents = iteration < 3 
+                  ? allEvents.filter(e => !bucket.crossImpactEvents.find(c => c.eventId === e.eventId))
+                  : allEvents;
 
-                const displayOngoingEvents = iteration < 3 
-                  ? ongoingEvents.filter(e => !bucket.crossImpactEvents.find(c => c.eventId === e.eventId))
-                  : ongoingEvents;
+                // Helper to get score for sorting
+                const getCombinedScore = (evt: EventEntry) => {
+                  const ts = getEventTimestamp(evt.sourceArticleIds);
+                  const timeMs = ts ? new Date(ts).getTime() : 0;
+                  const now = scenarioId === 'live' ? Date.now() : new Date('2026-05-28T17:25:00Z').getTime();
+                  const ageMinutes = Math.max(0, (now - timeMs) / 60000);
+                  
+                  // Find significance from synthesis mainCatalysts
+                  const catalystInfo = synthesis.mainCatalysts?.find((c: any) => c.eventId === evt.eventId);
+                  const significance = catalystInfo ? (catalystInfo.significance || 5) : 3;
+                  
+                  return (significance * 10) - (ageMinutes * 0.5);
+                };
+
+                // Merge and sort events
+                const sortedEvents = [...filteredAllEvents].sort((a, b) => getCombinedScore(b) - getCombinedScore(a));
 
                 const activeTickerLedger = ledgerEntries.filter(l => l.ticker === activeTicker);
-                const isSplitLayout = (iteration === 2 && activeTickerLedger.length > 0) || (iteration === 3);
 
                 return (
-                  <div className={isSplitLayout ? "ticker-detail-split" : ""}>
-                    {/* Left Column (Briefings and feeds) */}
+                  <div className="ticker-detail-split">
+                    {/* Left Column: Ticker Synthesis Briefing */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', minWidth: 0 }}>
-                      
-                      {/* Compact Synthesis Header Strip */}
                       <div className="glass synthesis-card compact-synthesis-strip">
-                        <div className="compact-synthesis-header">
+                        <div className="compact-synthesis-header" style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem', marginBottom: '0.5rem' }}>
                           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
                             <span className={`iteration-indicator it${iteration}`}>Iteration {iteration}</span>
                             <span className={`badge ${hasCatalysts ? influenceColor : 'unclear'}`}>
@@ -981,168 +1132,126 @@ export default function App() {
                             <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text-secondary)', display: 'inline-flex' }}>
                               Confidence: {synthesis.confidence}
                             </span>
-                            <h2 style={{ fontSize: '1.1rem', margin: 0, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '320px' }} title={synthesis.summaryHeadline}>
-                              {synthesis.summaryHeadline}
-                            </h2>
                           </div>
-                          
-                          <button 
-                            className="synthesis-toggle-btn"
-                            onClick={() => setSynthesisExpanded(!synthesisExpanded)}
-                          >
-                            {synthesisExpanded ? (
-                              <>Collapse <ChevronUp size={12} /></>
-                            ) : (
-                              <>Read Full Briefing <ChevronDown size={12} /></>
-                            )}
-                          </button>
                         </div>
 
-                        {synthesisExpanded && (
-                          <div className="synthesis-content-expanded">
-                            <div className="synthesis-summary">
-                              {synthesis.situationSummary}
-                            </div>
+                        <h2 style={{ fontSize: '1.3rem', fontWeight: 800, margin: '0.25rem 0 0.5rem 0', color: 'var(--text-primary)' }}>
+                          {synthesis.summaryHeadline}
+                        </h2>
 
-                            {/* Columns: Uncertainties & Watch Items */}
-                            <div className="synthesis-details-grid">
-                              <div className="details-column">
-                                <h3>🔑 Uncertainties / Open Risks</h3>
-                                <ul className="details-list">
-                                  {synthesis.uncertainties.map((u, i) => (
-                                    <li key={i}>{u}</li>
-                                  ))}
-                                </ul>
-                              </div>
-
-                              <div className="details-column">
-                                <h3>👀 Trader Watchlist Items</h3>
-                                <ul className="details-list">
-                                  {synthesis.watchItems.map((wi, i) => (
-                                    <li key={i}>{wi}</li>
-                                  ))}
-                                </ul>
-                              </div>
-                            </div>
-
-                            {/* Compliance Disclaimer */}
-                            <div className="compliance-disclaimer">
-                              <ShieldAlert size={16} style={{ color: 'var(--accent-orange)', flexShrink: 0 }} />
-                              <p>{synthesis.complianceDisclaimer || "Grounded information only. Not investment advice."}</p>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Fresh Catalysts Feed */}
-                      {displayFreshEvents.length > 0 && (
-                        <div className="catalysts-section">
-                          <h3 className="feed-type-title">
-                            <span className="pulsing-dot" style={{ color: iteration === 1 ? 'var(--accent-blue)' : iteration === 2 ? 'var(--accent-purple)' : 'var(--accent-cyan)' }} />
-                            ⚡ Fresh Breaking Catalysts
-                          </h3>
-                          <div className="catalysts-grid">
-                            {displayFreshEvents.map((evt) => {
-                              const isCross = bucket.crossImpactEvents.find(c => c.eventId === evt.eventId);
-                              const isGraphHovered = selectedCatalystPath && selectedCatalystPath.join(',') === evt.impactPath?.join(',');
-                              const ts = getEventTimestamp(evt.sourceArticleIds);
+                        <div className="synthesis-content-expanded" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: 0 }}>
+                          <div className="synthesis-summary" style={{ fontSize: '0.92rem', lineHeight: '1.55', background: 'rgba(255,255,255,0.01)' }}>
+                            {(() => {
+                              const text = synthesis.situationSummary || "";
+                              const sentences = text.match(/[^.!?]+[.!?]+(\s|$)/g) || [text];
+                              if (sentences.length <= 2) {
+                                return <span>{text}</span>;
+                              }
+                              const shortPart = sentences.slice(0, 2).join("").trim();
+                              const restPart = sentences.slice(2).join("").trim();
                               
-                              const catId = getEventCatalystId(evt.eventId);
-                              const elId = catId ? `evt-${catId}` : `evt-${evt.eventId}`;
-
-                              return (
-                                <div 
-                                  id={elId}
-                                  key={evt.eventId} 
-                                  className={`glass catalyst-card fresh-card accent-${iteration}`}
-                                  style={isCross ? { 
-                                    borderColor: isGraphHovered ? 'var(--accent-cyan)' : 'var(--border-color)',
-                                    boxShadow: isGraphHovered ? '0 0 15px rgba(6, 182, 212, 0.15)' : 'none',
-                                    transition: 'all 0.2s'
-                                  } : {}}
-                                  onMouseEnter={() => isCross && evt.impactPath && setSelectedCatalystPath(evt.impactPath)}
-                                  onMouseLeave={() => isCross && setSelectedCatalystPath(null)}
-                                >
-                                  <div className="catalyst-card-header" style={{ paddingRight: '6rem' }}>
-                                    <span className="badge" style={{ 
-                                      borderColor: isCross ? 'rgba(6, 182, 212, 0.3)' : 'rgba(168, 85, 247, 0.3)', 
-                                      color: isCross ? 'var(--accent-cyan)' : 'var(--accent-purple)' 
-                                    }}>
-                                      {isCross ? 'Cross-Impact Event' : 'Direct Company News'}
+                              if (summaryDetailExpanded) {
+                                return (
+                                  <span>
+                                    {shortPart} {restPart}
+                                    <span className="summary-toggle-link" onClick={() => setSummaryDetailExpanded(false)}>
+                                      [Show Less]
                                     </span>
-                                    <span className={`badge ${evt.possibleDirectionalPressure}`}>{evt.possibleDirectionalPressure}</span>
-                                  </div>
-
-                                  <span className="fresh-badge">
-                                    <span className="pulsing-dot" />
-                                    {ts ? formatRelativeTime(ts) : 'breaking'}
                                   </span>
+                                );
+                              } else {
+                                return (
+                                  <span>
+                                    {shortPart}...
+                                    <span className="summary-toggle-link" onClick={() => setSummaryDetailExpanded(true)}>
+                                      [Show More]
+                                    </span>
+                                  </span>
+                                );
+                              }
+                            })()}
+                          </div>
 
-                                  <div className="catalyst-title" style={{ marginTop: '0.25rem' }}>{evt.headline}</div>
-                                  <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
-                                    {evt.eventSummary}
-                                  </p>
-                                  <div className="catalyst-fact-box">
-                                    <div className="fact-title">Hard Facts Grounded in Text:</div>
-                                    {evt.hardFacts.map((fact, index) => (
-                                      <div key={index} className="catalyst-fact">• {fact}</div>
-                                    ))}
-                                  </div>
+                          {/* Columns: Uncertainties & Watch Items */}
+                          <div className="synthesis-details-grid" style={{ gridTemplateColumns: '1fr', gap: '1rem' }}>
+                            <div className="details-column">
+                              <h3 style={{ fontSize: '0.78rem' }}>🔑 Uncertainties / Open Risks</h3>
+                              <ul className="details-list" style={{ paddingLeft: '0.25rem' }}>
+                                {synthesis.uncertainties.map((u, i) => (
+                                  <li key={i} style={{ fontSize: '0.82rem' }}>{u}</li>
+                                ))}
+                              </ul>
+                            </div>
 
-                                  {isCross && evt.impactPath && (
-                                    <div>
-                                      <div className="fact-title" style={{ marginTop: '0.75rem', marginBottom: '0.25rem' }}>Exposure Chain Traversed:</div>
-                                      <div className="impact-path-display">
-                                        {evt.impactPath.map((step, idx) => {
-                                          const isFirst = idx === 0;
-                                          const isLast = idx === evt.impactPath!.length - 1;
-                                          return (
-                                            <React.Fragment key={idx}>
-                                              <span className={`path-step ${isFirst ? 'source' : ''} ${isLast ? 'ticker' : ''}`}>
-                                                {step}
-                                              </span>
-                                              {!isLast && <span className="path-arrow">→</span>}
-                                            </React.Fragment>
-                                          );
-                                        })}
-                                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
-                                          Path Score: {evt.pathConfidence}
-                                        </span>
-                                      </div>
-                                      <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem', fontStyle: 'italic' }}>
-                                        <strong>Causal path:</strong> {evt.reasonForRouting}
-                                      </p>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
+                            <div className="details-column">
+                              <h3 style={{ fontSize: '0.78rem' }}>👀 Trader Watchlist Items</h3>
+                              <ul className="details-list" style={{ paddingLeft: '0.25rem' }}>
+                                {synthesis.watchItems.map((wi, i) => (
+                                  <li key={i} style={{ fontSize: '0.82rem' }}>{wi}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          </div>
+
+                          {/* Exposure Graph Button (Iteration 3 only) */}
+                          {iteration === 3 && (
+                            <button
+                              onClick={() => setGraphModalOpen(true)}
+                              className="btn-secondary"
+                              style={{ padding: '0.45rem 0.9rem', display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem', marginTop: '0.25rem', width: 'fit-content' }}
+                              title="Open full-screen exposure graph"
+                            >
+                              <Network size={14} /> View Causal Exposure Graph
+                            </button>
+                          )}
+
+                          {/* Compliance Disclaimer */}
+                          <div className="compliance-disclaimer" style={{ marginTop: '0.5rem', padding: '0.6rem 0.75rem' }}>
+                            <ShieldAlert size={14} style={{ color: 'var(--accent-orange)', flexShrink: 0 }} />
+                            <p style={{ fontSize: '0.7rem' }}>{synthesis.complianceDisclaimer || "Grounded information only. Not investment advice."}</p>
                           </div>
                         </div>
-                      )}
+                      </div>
+                    </div>
 
-                      {/* Ongoing Storyline Updates Feed */}
-                      {displayOngoingEvents.length > 0 && iteration > 1 && (
-                        <div className="catalysts-section">
-                          <h3 className="feed-type-title">
-                            <Database size={14} style={{ color: 'var(--text-muted)' }} />
-                            🧠 Ongoing Storyline Updates (De-duplicated)
-                          </h3>
+                    {/* Right Column: Unified Live Feed + Structured Memory Index */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', minWidth: 0 }}>
+                      
+                      {/* Unified Live Feed */}
+                      <div className="catalysts-section">
+                        <h3 className="feed-type-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <span className="pulsing-dot" style={{ color: iteration === 1 ? 'var(--accent-blue)' : iteration === 2 ? 'var(--accent-purple)' : 'var(--accent-cyan)' }} />
+                            ⚡ Live Updates & Catalyst Feed
+                          </span>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'none', fontWeight: 'normal' }}>
+                            {sortedEvents.length} events sorted by recency & significance
+                          </span>
+                        </h3>
+
+                        {sortedEvents.length > 0 ? (
                           <div className="catalysts-grid">
-                            {displayOngoingEvents.map((evt) => {
+                            {sortedEvents.map((evt) => {
                               const isCross = bucket.crossImpactEvents.find(c => c.eventId === evt.eventId);
                               const isGraphHovered = selectedCatalystPath && selectedCatalystPath.join(',') === evt.impactPath?.join(',');
                               const ts = getEventTimestamp(evt.sourceArticleIds);
                               
-                              // Find corresponding ledger story
                               const catId = getEventCatalystId(evt.eventId);
                               const elId = catId ? `evt-${catId}` : `evt-${evt.eventId}`;
 
                               const ledgerEntry = ledgerEntries.find(l => l.catalystId === catId);
                               
+                              // Check decision: new vs update
+                              const decision = iteration === 1 ? 'new' : getEventDecision(evt.eventId);
+                              const isUpdate = decision === 'update';
+
+                              // Find significance rating for badge
+                              const catalystInfo = synthesis.mainCatalysts?.find((c: any) => c.eventId === evt.eventId);
+                              const significance = catalystInfo ? (catalystInfo.significance || 5) : 3;
+
                               // Segment facts: new vs previous
                               const newFacts = evt.hardFacts;
-                              const prevFacts = ledgerEntry 
+                              const prevFacts = (isUpdate && ledgerEntry)
                                 ? ledgerEntry.hardFactsSeen.filter((f: string) => !newFacts.includes(f))
                                 : [];
 
@@ -1150,7 +1259,7 @@ export default function App() {
                                 <div 
                                   id={elId}
                                   key={evt.eventId} 
-                                  className="glass catalyst-card ongoing-card"
+                                  className={`glass catalyst-card ${isUpdate ? 'ongoing-card' : `fresh-card accent-${iteration}`}`}
                                   style={isCross ? { 
                                     borderColor: isGraphHovered ? 'var(--accent-cyan)' : 'var(--border-color)',
                                     boxShadow: isGraphHovered ? '0 0 15px rgba(6, 182, 212, 0.15)' : 'none',
@@ -1159,52 +1268,84 @@ export default function App() {
                                   onMouseEnter={() => isCross && evt.impactPath && setSelectedCatalystPath(evt.impactPath)}
                                   onMouseLeave={() => isCross && setSelectedCatalystPath(null)}
                                 >
-                                  <div className="catalyst-card-header" style={{ paddingRight: '7.5rem' }}>
-                                    <span className="badge" style={{ borderColor: 'rgba(255,255,255,0.1)', color: 'var(--text-secondary)' }}>
-                                      {isCross ? 'Ongoing Cross-Impact Thread' : 'Ongoing Direct Thread'}
+                                  <div className="catalyst-card-header" style={{ paddingRight: '12rem' }}>
+                                    <span className="badge" style={{ 
+                                      borderColor: isCross ? 'rgba(6, 182, 212, 0.3)' : isUpdate ? 'rgba(255,255,255,0.1)' : 'rgba(168, 85, 247, 0.3)', 
+                                      color: isCross ? 'var(--accent-cyan)' : isUpdate ? 'var(--text-secondary)' : 'var(--accent-purple)' 
+                                    }}>
+                                      {isCross 
+                                        ? (isUpdate ? 'Ongoing Cross-Impact' : 'Cross-Impact Catalyst') 
+                                        : (isUpdate ? 'Ongoing Direct Thread' : 'Direct Catalyst')}
                                     </span>
                                     <span className={`badge ${evt.possibleDirectionalPressure}`}>{evt.possibleDirectionalPressure}</span>
                                   </div>
 
-                                  <span className="ongoing-badge">
-                                    {ts ? `Updated ${formatRelativeTime(ts)}` : 'ongoing thread'}
-                                  </span>
+                                  <div style={{ position: 'absolute', top: '1.25rem', right: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    {/* Significance Badge */}
+                                    <span className="badge" style={{
+                                      background: significance >= 7 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(255, 255, 255, 0.05)',
+                                      color: significance >= 7 ? 'var(--accent-red)' : 'var(--text-secondary)',
+                                      border: `1px solid ${significance >= 7 ? 'rgba(239, 68, 68, 0.25)' : 'var(--border-color)'}`,
+                                      fontSize: '0.65rem',
+                                      padding: '0.1rem 0.4rem',
+                                      fontWeight: 800
+                                    }}>
+                                      Sig: {significance}/10
+                                    </span>
 
-                                  <div className="catalyst-title" style={{ marginTop: '0.25rem' }}>{evt.headline}</div>
+                                    {/* Recency Badge */}
+                                    <span className={isUpdate ? 'ongoing-badge' : 'fresh-badge'} style={{ position: 'static', margin: 0 }}>
+                                      {!isUpdate && <span className="pulsing-dot" />}
+                                      {ts ? formatRelativeTime(ts) : 'breaking'}
+                                    </span>
+                                  </div>
+
+                                  <div className="catalyst-title" style={{ marginTop: '0.35rem' }}>{evt.headline}</div>
                                   <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
                                     {evt.eventSummary}
                                   </p>
 
-                                  <div className="storyline-timeline">
-                                    <div className="timeline-title">Story Timeline & Fact Progression</div>
-                                    <div className="timeline-facts-box">
-                                      {/* New Facts */}
-                                      {newFacts.map((fact, index) => (
-                                        <div key={`new-${index}`} className="timeline-node new-fact">
-                                          <span style={{ fontSize: '0.62rem', textTransform: 'uppercase', background: 'rgba(168, 85, 247, 0.15)', color: 'var(--accent-purple)', padding: '0.05rem 0.25rem', borderRadius: '3px', marginRight: '0.35rem' }}>New Fact</span>
-                                          {fact}
-                                        </div>
-                                      ))}
+                                  {isUpdate ? (
+                                    /* Story Timeline progression for Updates */
+                                    <div className="storyline-timeline">
+                                      <div className="timeline-title">Story Timeline & Fact Progression</div>
+                                      <div className="timeline-facts-box">
+                                        {/* New Facts */}
+                                        {newFacts.map((fact, index) => (
+                                          <div key={`new-${index}`} className="timeline-node new-fact">
+                                            <span style={{ fontSize: '0.62rem', textTransform: 'uppercase', background: 'rgba(168, 85, 247, 0.15)', color: 'var(--accent-purple)', padding: '0.05rem 0.25rem', borderRadius: '3px', marginRight: '0.35rem' }}>New Fact</span>
+                                            {fact}
+                                          </div>
+                                        ))}
+                                        
+                                        {/* Previous Facts (Dimmed) */}
+                                        {prevFacts.map((fact: string, index: number) => (
+                                          <div key={`prev-${index}`} className="timeline-node" style={{ opacity: 0.55 }}>
+                                            <span style={{ fontSize: '0.62rem', textTransform: 'uppercase', background: 'rgba(255, 255, 255, 0.05)', color: 'var(--text-muted)', padding: '0.05rem 0.25rem', borderRadius: '3px', marginRight: '0.35rem' }}>Priced In</span>
+                                            {fact}
+                                          </div>
+                                        ))}
+                                      </div>
                                       
-                                      {/* Previous Facts (Dimmed) */}
-                                      {prevFacts.map((fact: string, index: number) => (
-                                        <div key={`prev-${index}`} className="timeline-node" style={{ opacity: 0.55 }}>
-                                          <span style={{ fontSize: '0.62rem', textTransform: 'uppercase', background: 'rgba(255, 255, 255, 0.05)', color: 'var(--text-muted)', padding: '0.05rem 0.25rem', borderRadius: '3px', marginRight: '0.35rem' }}>Priced In</span>
-                                          {fact}
+                                      {ledgerEntry && (
+                                        <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'flex', gap: '1rem', marginTop: '0.25rem', paddingLeft: '0.75rem' }}>
+                                          <span>First Seen: {formatRelativeTime(ledgerEntry.firstSeenAt)}</span>
+                                          <span>Total reports: {ledgerEntry.memberArticleIds.length}</span>
                                         </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    /* Hard facts for new news cards */
+                                    <div className="catalyst-fact-box">
+                                      <div className="fact-title">Hard Facts Grounded in Text:</div>
+                                      {evt.hardFacts.map((fact, index) => (
+                                        <div key={index} className="catalyst-fact">• {fact}</div>
                                       ))}
                                     </div>
-                                    
-                                    {ledgerEntry && (
-                                      <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'flex', gap: '1rem', marginTop: '0.25rem', paddingLeft: '0.75rem' }}>
-                                        <span>First Seen: {formatRelativeTime(ledgerEntry.firstSeenAt)}</span>
-                                        <span>Total reports: {ledgerEntry.memberArticleIds.length}</span>
-                                      </div>
-                                    )}
-                                  </div>
+                                  )}
 
                                   {isCross && evt.impactPath && (
-                                    <div style={{ marginTop: '1.25rem' }}>
+                                    <div style={{ marginTop: '1rem' }}>
                                       <div className="fact-title" style={{ marginBottom: '0.25rem' }}>Exposure Chain Traversed:</div>
                                       <div className="impact-path-display">
                                         {evt.impactPath.map((step, idx) => {
@@ -1219,6 +1360,78 @@ export default function App() {
                                             </React.Fragment>
                                           );
                                         })}
+                                        {!isUpdate && (
+                                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                                            Path Score: {evt.pathConfidence}
+                                          </span>
+                                        )}
+                                      </div>
+                                      {!isUpdate && evt.reasonForRouting && (
+                                        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem', fontStyle: 'italic' }}>
+                                          <strong>Causal path:</strong> {evt.reasonForRouting}
+                                        </p>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                            No catalysts detected in this run.
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Active Memory Index (Database state - shown in Iterations 2 & 3) */}
+                      {iteration > 1 && activeTickerLedger.length > 0 && (
+                        <section className="glass panel-card">
+                          <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
+                            <Database size={13} style={{ color: 'var(--accent-purple)' }} />
+                            Active Memory Index ({activeTickerLedger.length} stories in local DB)
+                          </h2>
+                          <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>
+                            Current state of local vector database memory. Click active updates to scroll to card, or background entries to expand hard facts inline.
+                          </p>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '400px', overflowY: 'auto', paddingRight: '0.25rem' }}>
+                            {activeTickerLedger.map((entry) => {
+                              const isUpdatedInRun = sortedEvents.some(e => getEventCatalystId(e.eventId) === entry.catalystId);
+                              const isSelected = selectedBackgroundStory === entry.catalystId;
+                              
+                              return (
+                                <div 
+                                  key={entry.catalystId} 
+                                  className={`memory-index-row ${isUpdatedInRun ? 'status-active' : 'status-background'}`}
+                                  onClick={() => {
+                                    if (isUpdatedInRun) {
+                                      const el = document.getElementById(`evt-${entry.catalystId}`);
+                                      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    } else {
+                                      setSelectedBackgroundStory(isSelected ? null : entry.catalystId);
+                                    }
+                                  }}
+                                >
+                                  <div className="index-row-header">
+                                    <span className="index-row-type">{entry.eventType}</span>
+                                    <span className={`index-row-status-dot ${isUpdatedInRun ? 'active' : 'background'}`} />
+                                  </div>
+                                  <div className="index-row-title">{entry.canonicalSummary}</div>
+                                  <div className="index-row-footer">
+                                    <span>First seen: {formatRelativeTime(entry.firstSeenAt)}</span>
+                                    <span>Facts: {entry.hardFactsSeen.length}</span>
+                                  </div>
+
+                                  {!isUpdatedInRun && isSelected && (
+                                    <div className="index-row-expanded" onClick={(e) => e.stopPropagation()}>
+                                      <div className="expanded-summary-title">Full Grounded Memory State:</div>
+                                      <div className="expanded-facts-list">
+                                        {entry.hardFactsSeen.map((fact: string, idx: number) => (
+                                          <div key={idx} className="expanded-fact-item">• {fact}</div>
+                                        ))}
+                                      </div>
+                                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                                        First seen: {formatRelativeTime(entry.firstSeenAt)} | Reports: {entry.memberArticleIds.length}
                                       </div>
                                     </div>
                                   )}
@@ -1226,99 +1439,9 @@ export default function App() {
                               );
                             })}
                           </div>
-                        </div>
+                        </section>
                       )}
                     </div>
-
-                    {/* Right Column (Exposure Graph / Structured Memory Index) */}
-                    {isSplitLayout && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', width: '380px', flexShrink: 0 }}>
-                        {/* Iteration 3: Graph widget */}
-                        {iteration === 3 && (
-                          <section className="glass panel-card">
-                            <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.35rem' }}>
-                              <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                <Network size={14} /> Causal Exposure Graph
-                              </span>
-                              <button
-                                onClick={() => setGraphModalOpen(true)}
-                                className="btn-secondary"
-                                style={{ padding: '0.2rem 0.45rem', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem' }}
-                                title="Open full-screen graph"
-                              >
-                                <Maximize2 size={12} /> Open
-                              </button>
-                            </h2>
-                            <div className="graph-container" style={{ cursor: graphData.nodes.length > 0 ? 'pointer' : 'default' }} onClick={() => graphData.nodes.length > 0 && setGraphModalOpen(true)}>
-                              <GraphView graphData={graphData} width={380} height={250} scale={1} selectedCatalystPath={selectedCatalystPath} />
-                            </div>
-                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textAlign: 'center', marginTop: '-0.3rem' }}>
-                              Click to open. Hover over indirect cards to highlight pathways.
-                            </div>
-                          </section>
-                        )}
-
-                        {/* Iteration 2: Watchlist Memory Ledger Radar */}
-                        {iteration === 2 && activeTickerLedger.length > 0 && (
-                          <section className="glass panel-card">
-                            <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
-                              <Database size={13} style={{ color: 'var(--accent-purple)' }} />
-                              Active Memory Index ({activeTickerLedger.length} stories)
-                            </h2>
-                            <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>
-                              State of the local vector database. Click background stories to read.
-                            </p>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '500px', overflowY: 'auto', paddingRight: '0.25rem' }}>
-                              {activeTickerLedger.map((entry) => {
-                                // Check if this memory entry was updated in this run
-                                const isUpdatedInRun = displayOngoingEvents.some(e => getEventCatalystId(e.eventId) === entry.catalystId) ||
-                                                       displayFreshEvents.some(e => getEventCatalystId(e.eventId) === entry.catalystId);
-                                const isSelected = selectedBackgroundStory === entry.catalystId;
-                                
-                                return (
-                                  <div 
-                                    key={entry.catalystId} 
-                                    className={`memory-index-row ${isUpdatedInRun ? 'status-active' : 'status-background'}`}
-                                    onClick={() => {
-                                      if (isUpdatedInRun) {
-                                        const el = document.getElementById(`evt-${entry.catalystId}`);
-                                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                      } else {
-                                        setSelectedBackgroundStory(isSelected ? null : entry.catalystId);
-                                      }
-                                    }}
-                                  >
-                                    <div className="index-row-header">
-                                      <span className="index-row-type">{entry.eventType}</span>
-                                      <span className={`index-row-status-dot ${isUpdatedInRun ? 'active' : 'background'}`} />
-                                    </div>
-                                    <div className="index-row-title">{entry.canonicalSummary}</div>
-                                    <div className="index-row-footer">
-                                      <span>First seen: {formatRelativeTime(entry.firstSeenAt)}</span>
-                                      <span>Facts: {entry.hardFactsSeen.length}</span>
-                                    </div>
-
-                                    {!isUpdatedInRun && isSelected && (
-                                      <div className="index-row-expanded" onClick={(e) => e.stopPropagation()}>
-                                        <div className="expanded-summary-title">Full Grounded Memory State:</div>
-                                        <div className="expanded-facts-list">
-                                          {entry.hardFactsSeen.map((fact: string, idx) => (
-                                            <div key={idx} className="expanded-fact-item">• {fact}</div>
-                                          ))}
-                                        </div>
-                                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                                          First seen: {formatRelativeTime(entry.firstSeenAt)} | Reports: {entry.memberArticleIds.length}
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </section>
-                        )}
-                      </div>
-                    )}
                   </div>
                 );
               })()}

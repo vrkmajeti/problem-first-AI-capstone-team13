@@ -1,3 +1,9 @@
+import mimetypes
+try:
+    mimetypes.init(files=[])
+except Exception:
+    pass
+
 import os
 import json
 from dotenv import load_dotenv
@@ -5,13 +11,13 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv("backend/.env")
 
-from backend.graph import build_workflow_graph
+from backend.iterations import get_workflow
 from backend.seed_data import SCENARIOS
 
 def main():
     print("Building workflow graph...")
-    workflow = build_workflow_graph()
-    
+    workflow = get_workflow(3)
+
     initial_state = {
         "iteration": 3,
         "watchlist": ["AAPL", "MSFT", "NVDA", "TSM", "DAL"],

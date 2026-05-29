@@ -1,3 +1,9 @@
+import mimetypes
+try:
+    mimetypes.init(files=[])
+except Exception:
+    pass
+
 import uvicorn
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,8 +15,8 @@ from backend.routing import get_graph, add_graph_node, add_graph_edge, set_graph
 from backend.memory import get_ledger, clear_ledger
 import backend.memory as _memory_module
 from backend.config import GEMINI_API_KEY, OPENAI_API_KEY, LLM_PROVIDER
-from backend.graph import build_workflow_graph
-from backend.persistence import load_watchlist, save_watchlist, load_graph, save_graph
+from backend.iterations import get_workflow
+from backend.persistence import load_watchlist, save_watchlist, load_graph, save_graph, load_run_results, save_run_results
 from backend.graph_expansion import (
     process_ticker_expansion,
     mark_pending,
@@ -30,9 +36,7 @@ app.add_middleware(
 
 # In-memory Watchlist configuration
 _watchlist = ["AAPL", "MSFT", "NVDA", "TSM", "DAL"]
-
-# Compile LangGraph app
-workflow_app = build_workflow_graph()
+_run_results: Dict[int, Dict[str, Any]] = {}
 
 class RunRequest(BaseModel):
     iteration: int # 1, 2, or 3
@@ -51,10 +55,18 @@ class RebuildRequest(BaseModel):
 
 @app.on_event("startup")
 def startup_event():
-    global _watchlist
+    global _watchlist, _run_results
     init_phoenix()
     _watchlist = load_watchlist(default=_watchlist)
     set_graph(load_graph(default=get_graph()))
+    # Load run results and convert string keys from JSON back to integers
+    loaded = load_run_results()
+    _run_results = {}
+    for k, v in loaded.items():
+        try:
+            _run_results[int(k)] = v
+        except Exception:
+            pass
 
 @app.get("/api/watchlist")
 def get_watchlist():
@@ -139,13 +151,18 @@ def add_edge(edge: Dict[str, Any]):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/api/ledger")
-def get_active_ledger():
-    return get_ledger()
+def get_active_ledger(iteration: int = 2):
+    return get_ledger(iteration)
 
 @app.post("/api/ledger/clear")
-def reset_ledger():
-    clear_ledger()
-    return {"status": "success", "message": "Catalyst Ledger has been cleared."}
+def reset_ledger(iteration: Optional[int] = None):
+    clear_ledger(iteration)
+    return {"status": "success", "message": f"Catalyst Ledger for iteration {iteration if iteration is not None else 'all'} has been cleared."}
+
+@app.get("/api/results")
+def get_latest_results():
+    """Returns the cached run results for all iterations."""
+    return _run_results
 
 @app.post("/api/run")
 def trigger_pipeline(req: RunRequest):
@@ -153,6 +170,21 @@ def trigger_pipeline(req: RunRequest):
     if req.iteration not in [1, 2, 3]:
         raise HTTPException(status_code=400, detail="Iteration must be 1, 2, or 3.")
         
+    try:
+        from opentelemetry import trace as otel_trace
+        tracer = otel_trace.get_tracer("cross-impact-catalysts")
+        try:
+            from openinference.semconv.trace import SpanAttributes
+            OPENINFERENCE_SPAN_KIND = SpanAttributes.OPENINFERENCE_SPAN_KIND
+            INPUT_VALUE = SpanAttributes.INPUT_VALUE
+            OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
+        except ImportError:
+            OPENINFERENCE_SPAN_KIND = "openinference.span.kind"
+            INPUT_VALUE = "input.value"
+            OUTPUT_VALUE = "output.value"
+    except Exception:
+        tracer = None
+
     initial_state = {
         "iteration": req.iteration,
         "watchlist": _watchlist,
@@ -169,45 +201,91 @@ def trigger_pipeline(req: RunRequest):
     }
 
     # Snapshot ledger before run so we can roll back if the pipeline fails
-    ledger_snapshot = list(_memory_module._ledger_store)
-    
-    try:
-        print(f"Executing LangGraph workflow for Iteration {req.iteration} (Scenario: {req.scenario_id})...")
-        final_state = workflow_app.invoke(initial_state)
+    ledger_snapshot = {k: list(v) for k, v in _memory_module._ledger_store.items()}
 
-        # If LLM failed, roll back any ledger writes made during this run so
-        # re-running won't treat those articles as already-seen duplicates.
-        if final_state.get("llm_failed", False):
-            print("Pipeline had LLM failure — rolling back ledger to pre-run snapshot.")
+    def _run_with_ledger():
+        try:
+            print(f"Executing LangGraph workflow for Iteration {req.iteration} (Scenario: {req.scenario_id})...")
+            final_state = get_workflow(req.iteration).invoke(initial_state)
+
+            # If LLM failed, roll back any ledger writes made during this run so
+            # re-running won't treat those articles as already-seen duplicates.
+            if final_state.get("llm_failed", False):
+                print("Pipeline had LLM failure — rolling back ledger to pre-run snapshot.")
+                _memory_module._ledger_store.clear()
+                _memory_module._ledger_store.update(ledger_snapshot)
+
+            # Clean final state for client consumption
+            response_data = {
+                "runId": f"run_{req.scenario_id}_{int(datetime_now().timestamp())}",
+                "iteration": final_state["iteration"],
+                "watchlist": final_state["watchlist"],
+                "articlesCount": len(final_state.get("articles", [])),
+                "eventsCount": len(final_state.get("canonical_events", [])),
+                "routedCount": len(final_state.get("routed_candidates", [])),
+                "duplicateCounts": final_state.get("duplicate_counts", {}),
+                "tickerSyntheses": final_state.get("ticker_syntheses", {}),
+                "llmFailed": final_state.get("llm_failed", False),
+                # Debug structures
+                "rawArticles": final_state.get("articles", []),
+                "canonicalEvents": final_state.get("canonical_events", []),
+                "routedCandidates": final_state.get("routed_candidates", []),
+                "tickerBuckets": final_state.get("ticker_buckets", {})
+            }
+            # Cache run result per iteration
+            global _run_results
+            _run_results[req.iteration] = response_data
+            save_run_results(_run_results)
+            return response_data
+        except Exception as e:
+            # Also roll back ledger on unexpected crash
+            print(f"Error running pipeline: {e} — rolling back ledger.")
             _memory_module._ledger_store.clear()
-            _memory_module._ledger_store.extend(ledger_snapshot)
+            _memory_module._ledger_store.update(ledger_snapshot)
+            import traceback
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=f"Pipeline execution failed: {str(e)}")
 
-        # Clean final state for client consumption
-        response_data = {
-            "runId": f"run_{req.scenario_id}_{int(datetime_now().timestamp())}",
-            "iteration": final_state["iteration"],
-            "watchlist": final_state["watchlist"],
-            "articlesCount": len(final_state.get("articles", [])),
-            "eventsCount": len(final_state.get("canonical_events", [])),
-            "routedCount": len(final_state.get("routed_candidates", [])),
-            "duplicateCounts": final_state.get("duplicate_counts", {}),
-            "tickerSyntheses": final_state.get("ticker_syntheses", {}),
-            "llmFailed": final_state.get("llm_failed", False),
-            # Debug structures
-            "rawArticles": final_state.get("articles", []),
-            "canonicalEvents": final_state.get("canonical_events", []),
-            "routedCandidates": final_state.get("routed_candidates", []),
-            "tickerBuckets": final_state.get("ticker_buckets", {})
-        }
-        return response_data
-    except Exception as e:
-        # Also roll back ledger on unexpected crash
-        print(f"Error running pipeline: {e} — rolling back ledger.")
-        _memory_module._ledger_store.clear()
-        _memory_module._ledger_store.extend(ledger_snapshot)
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Pipeline execution failed: {str(e)}")
+    if tracer:
+        import json
+        if req.iteration == 1:
+            span_name = "Iteration 1: Naive News Briefing"
+        elif req.iteration == 2:
+            span_name = "Iteration 2: News Briefing with Memory"
+        else:
+            span_name = "Iteration 3: Cross-Impact Briefing"
+
+        with tracer.start_as_current_span(span_name) as span:
+            span.set_attribute("iteration", req.iteration)
+            span.set_attribute("scenario_id", req.scenario_id)
+            span.set_attribute(OPENINFERENCE_SPAN_KIND, "CHAIN")
+            
+            input_summary = {
+                "iteration": req.iteration,
+                "scenario_id": req.scenario_id,
+                "simulated_now": req.simulated_now,
+                "watchlist": _watchlist
+            }
+            span.set_attribute(INPUT_VALUE, json.dumps(input_summary))
+
+            res = _run_with_ledger()
+            
+            span.set_attribute("articles_count", res.get("articlesCount", 0))
+            span.set_attribute("events_count", res.get("eventsCount", 0))
+            span.set_attribute("routed_count", res.get("routedCount", 0))
+            
+            output_summary = {
+                "runId": res.get("runId"),
+                "articlesCount": res.get("articlesCount"),
+                "eventsCount": res.get("eventsCount"),
+                "routedCount": res.get("routedCount"),
+                "llmFailed": res.get("llmFailed")
+            }
+            span.set_attribute(OUTPUT_VALUE, json.dumps(output_summary))
+            return res
+    else:
+        return _run_with_ledger()
+
 
 @app.get("/api/phoenix-status")
 def get_phoenix_status():
@@ -243,7 +321,10 @@ def get_memory_status():
         llm_extraction_model = "N/A"
         llm_synthesis_model = "N/A"
 
-    live_entries = [e for e in _memory_module._ledger_store if e.get("status") == "live"]
+    total_entries = sum(len(entries) for entries in _memory_module._ledger_store.values())
+    live_entries = []
+    for iteration_entries in _memory_module._ledger_store.values():
+        live_entries.extend([e for e in iteration_entries if e.get("status") == "live"])
     embedded_entries = [e for e in live_entries if e.get("embedding_vec")]
 
     return {
@@ -254,7 +335,7 @@ def get_memory_status():
         "isFallbackActive": not embedding_active,
         "similarityThreshold": 0.75,
         "jaccardFactThreshold": 0.6,
-        "ledgerTotalEntries": len(_memory_module._ledger_store),
+        "ledgerTotalEntries": total_entries,
         "ledgerLiveEntries": len(live_entries),
         "ledgerEmbeddedEntries": len(embedded_entries),
         "llmExtractionModel": llm_extraction_model,

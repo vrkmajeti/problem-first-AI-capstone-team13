@@ -111,8 +111,8 @@ def fetch_currents_cross_impact_news(keywords: List[str]) -> List[Dict[str, Any]
         return []
 
 def get_news_payload(
-    symbol_watchlist: List[str], 
-    cross_impact_keywords: List[str], 
+    symbol_watchlist: List[str],
+    cross_impact_keywords: List[str],
     scenario_id: str = "live",
     simulated_now_str: str = "2026-05-28T17:25:00Z",
     extra_tickers: List[str] = None
@@ -179,8 +179,10 @@ def get_news_payload(
             seen_urls.add(url)
             
     print(f"Ingested {len(all_articles)} articles, {len(filtered_articles)} passed freshness filter.")
+    
     return {
         "articles": filtered_articles,
         "total_ingested": len(all_articles),
         "passed_freshness": len(filtered_articles)
     }
+

@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//mnt/d/git/problem-first-AI-capstone-team13/backend/**)",
+      "Bash(python -c \"import json;d=json.load\\(open\\('backend/state/graph.json'\\)\\);print\\('nodes',len\\(d['nodes']\\),'edges',len\\(d['edges']\\)\\)\")",
+      "Read(//c/Users/lucaz/AppData/Local/Temp/**)",
+      "Bash(timeout 25 ./backend/.venv/Scripts/python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8011)",
+      "PowerShell(python backend/run_tests.py)",
+      "PowerShell(python -m backend.run_tests)",
+      "PowerShell(python -c \"import backend.main; from backend.graph import get_workflow; get_workflow\\(1\\); get_workflow\\(2\\); get_workflow\\(3\\); print\\('OK: app imports + all three chains compile'\\)\")",
+      "PowerShell(New-Item -ItemType Directory -Force backend/iterations)",
+      "PowerShell(git mv backend/graph.py backend/iterations/common.py)",
+      "PowerShell(python -c \"import backend.main; import backend.scratch_inspect; import backend.graph_expansion; from backend.iterations import get_workflow; [get_workflow\\(i\\) for i in \\(1,2,3\\)]; print\\('OK: main, scratch_inspect, graph_expansion import; all 3 chains compile'\\)\")",
+      "PowerShell(& 'd:\\\\git\\\\problem-first-AI-capstone-team13\\\\backend\\\\.venv\\\\Scripts\\\\python.exe' -c \"import runpy, importlib.util, uvicorn; import backend.main; print\\('venv python OK - runpy + uvicorn + backend.main all import'\\)\")",
+      "PowerShell($c = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { $c | Select-Object LocalAddress,LocalPort,OwningProcess; Get-Process -Id \\($c.OwningProcess | Select-Object -Unique\\) | Select-Object Id,ProcessName } else { \"Port 8000 is free — no stale listener.\" })",
+      "PowerShell(& 'd:\\\\git\\\\problem-first-AI-capstone-team13\\\\backend\\\\.venv\\\\Scripts\\\\python.exe' -c \"import time; from importlib import metadata; t=time.time\\(\\); ds=list\\(metadata.distributions\\(\\)\\); _=[d.read_text\\('METADATA'\\) for d in ds]; print\\(len\\(ds\\), 'packages, metadata scan took', round\\(time.time\\(\\)-t,2\\), 's'\\)\")",
+      "PowerShell(& 'd:\\\\git\\\\problem-first-AI-capstone-team13\\\\backend\\\\.venv\\\\Scripts\\\\python.exe' -c \"import time; t=time.time\\(\\); import phoenix; from alembic import command; from mako.template import Template; print\\('phoenix + alembic + mako import OK in', round\\(time.time\\(\\)-t,2\\), 's'\\)\")",
+      "PowerShell(& 'd:\\\\git\\\\problem-first-AI-capstone-team13\\\\backend\\\\.venv\\\\Scripts\\\\python.exe' -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 2>&1)",
+      "PowerShell($ok=$false; for \\($i=0; $i -lt 40; $i++\\) { try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8000/api/watchlist' -UseBasicParsing -TimeoutSec 2; Write-Output \"HTTP $\\($r.StatusCode\\): $\\($r.Content\\)\"; $ok=$true; break } catch { Start-Sleep -Milliseconds 1000 } }; if \\(-not $ok\\) { Write-Output \"Server not responding after 40s\" })",
+      "PowerShell($body = @{ iteration = 3; scenario_id = 'live' } | ConvertTo-Json; try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8000/api/run' -Method POST -ContentType 'application/json' -Body $body -TimeoutSec 180; $j = $r.Content | ConvertFrom-Json; Write-Output \"HTTP $\\($r.StatusCode\\) | articles=$\\($j.articlesCount\\) events=$\\($j.eventsCount\\) routed=$\\($j.routedCount\\) llmFailed=$\\($j.llmFailed\\)\"; Write-Output \"tickers synthesized: $\\($j.tickerSyntheses.PSObject.Properties.Name -join ', '\\)\" } catch { Write-Output \"ERROR: $\\($_.Exception.Message\\)\"; if \\($_.ErrorDetails\\) { Write-Output $_.ErrorDetails.Message } })",
+      "Bash(taskkill //F //PID 32960)",
+      "PowerShell($c = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { \"Still listening on 8000 \\(PID $\\($c.OwningProcess\\)\\)\" } else { \"Port 8000 free.\" })",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; & 'd:\\\\git\\\\problem-first-AI-capstone-team13\\\\backend\\\\.venv\\\\Scripts\\\\python.exe' -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 2>&1)",
+      "PowerShell($ok=$false; for \\($i=0; $i -lt 25; $i++\\) { try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8000/api/watchlist' -UseBasicParsing -TimeoutSec 2; Write-Output \"SERVER UP — HTTP $\\($r.StatusCode\\)\"; $ok=$true; break } catch { Start-Sleep -Milliseconds 1000 } }; if \\(-not $ok\\) { Write-Output \"not responding yet\" })",
+      "Bash(taskkill //F //PID 17832)",
+      "Bash(time ./backend/.venv/Scripts/python.exe -c \"import time; t=time.time\\(\\); import email_validator; print\\('imported in', round\\(time.time\\(\\)-t,3\\),'s'\\)\")",
+      "Bash(timeout 60 ./backend/.venv/Scripts/python.exe -c \"import phoenix; print\\('OK phoenix', phoenix.__version__\\)\")",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(./backend/.venv/Scripts/python.exe -c \"import httpx2, os; print\\('httpx2 at:', httpx2.__file__\\)\")",
+      "Bash(./backend/.venv/Scripts/python.exe -m pip show httpx2)",
+      "Bash(time ./backend/.venv/Scripts/python.exe -c \"import phoenix\")",
+      "Read(//tmp/**)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:8000/docs)",
+      "Bash(npx kill-port *)",
+      "Bash(time ./backend/.venv/Scripts/python.exe -c 'import mimetypes; mimetypes.init\\(\\)')",
+      "Bash(time ./backend/.venv/Scripts/python.exe -c 'import pydantic_ai')",
+      "Bash(time ./backend/.venv/Scripts/python.exe -c 'import phoenix')",
+      "PowerShell(Remove-Item -Recurse -Force 'd:\\\\git\\\\problem-first-AI-capstone-team13\\\\backend\\\\.venv' -Confirm:$false)"
+    ]
+  }
+}

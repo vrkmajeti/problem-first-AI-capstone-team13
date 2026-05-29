@@ -24,16 +24,43 @@ Built with **LangGraph** (pipeline orchestration), **FastAPI** (backend API), **
 
 ## How It Works
 
-Each pipeline run executes a six-node LangGraph workflow:
+Each run executes one of three compiled LangGraph workflows in `backend/iterations/`, all built from shared helpers in `backend/iterations/common.py`:
 
-```
+```text
+Iteration 1
 Fetch & Filter News
+        ↓
+Canonical Event Extraction  (LLM: gpt-4.1-nano / gemini-2.5-flash)
+        ↓
+Route Events to Tickers     (direct tag routing)
+        ↓
+Assign Catalyst IDs         (no ledger in Iteration 1)
+        ↓
+Per-Ticker Synthesis        (LLM: gpt-4o-mini / gemini-2.5-flash)
+        ↓
+Compliance Gate             (regex scrub of buy/sell language)
+
+Iteration 2
+Fetch & Filter News
+        ↓
+Canonical Event Extraction  (LLM: gpt-4.1-nano / gemini-2.5-flash)
+        ↓
+Route Events to Tickers     (direct tag routing)
+        ↓
+Ledger Memory Check         (local embeddings / lexical fallback)
+        ↓
+Per-Ticker Synthesis        (LLM: gpt-4o-mini / gemini-2.5-flash)
+        ↓
+Compliance Gate             (regex scrub of buy/sell language)
+
+Iteration 3
+Fetch & Filter News + Graph Query Expansion
         ↓
 Canonical Event Extraction  (LLM: gpt-4.1-nano / gemini-2.5-flash)
         ↓
 Route Events to Tickers     (direct tag + exposure graph traversal)
         ↓
-Ledger Memory Check         (cosine similarity deduplication)
+Ledger Memory Check         (local embeddings / lexical fallback)
         ↓
 Per-Ticker Synthesis        (LLM: gpt-4o-mini / gemini-2.5-flash)
         ↓
@@ -41,6 +68,10 @@ Compliance Gate             (regex scrub of buy/sell language)
 ```
 
 **No API keys?** The app runs in no-key mode using pre-baked mock events and rules-based synthesis. All three replay scenarios work fully offline.
+
+### Exposure-graph expansion (separate from the run pipeline)
+
+When you **add a ticker** to the watchlist, a background task maps that ticker's causal exposure (suppliers, customers, competitors, partners, regions, technology themes, commodities, macro/shipping risks) and merges the resulting nodes and edges into the exposure graph. It pulls known stock peers from Finnhub, then calls the LLM (`get_llm` — `gpt-4o-mini` / `gemini-2.5-flash`) to generate the surrounding graph. Exposure and sensitivity edges are directional from the cause/source node to the affected company or ticker. This runs **once per ticker on add** (not on every pipeline run), and can be re-triggered manually per ticker or rebuilt for the whole watchlist. With no LLM keys, only the bare ticker node is added. Per-ticker progress (`pending → running → done/skipped/failed`) is shown in the UI.
 
 ---
 
@@ -259,7 +290,7 @@ The `.vscode/launch.json` includes pre-configured debug/run configurations:
 
 ## Running Tests
 
-The test suite verifies the LangGraph workflow end-to-end: direct routing, duplicate suppression, and cross-impact graph traversal.
+The test suite verifies the three LangGraph workflows end-to-end: direct routing, duplicate suppression, and cross-impact graph traversal.
 
 ```bash
 # From the repository root, with the venv active
@@ -285,6 +316,7 @@ Tests run with mocked LLM responses and do not require any API keys.
 Select the iteration and scenario from the header dropdowns, then click **Fetch Catalysts**.
 
 ### Iteration 1 — Direct News Synthesis
+- Uses `backend/iterations/iter1.py`.
 - Fetches news articles tagged with watchlist ticker symbols.
 - Extracts structured canonical events via LLM (or mock).
 - Synthesizes a briefing for each ticker that has direct news.
@@ -296,6 +328,7 @@ Select the iteration and scenario from the header dropdowns, then click **Fetch 
 ---
 
 ### Iteration 2 — Catalyst Memory Deduplication
+- Uses `backend/iterations/iter2.py`.
 - Everything from Iteration 1, plus:
 - An in-memory vector ledger checks each incoming event against previously seen catalysts using cosine similarity (threshold ≥ 0.75) and Jaccard fact overlap (threshold ≥ 0.60).
 - **Duplicate:** same story, no new facts → suppressed, counted.
@@ -310,6 +343,7 @@ Select the iteration and scenario from the header dropdowns, then click **Fetch 
 ---
 
 ### Iteration 3 — Graph Cross-Impact Routing
+- Uses `backend/iterations/iter3.py`.
 - Everything from Iteration 2, plus:
 - The exposure graph is used to expand search keywords by traversing up to 2 hops from watched tickers.
 - Untickered external events (no `relatedTickers`) are matched to graph nodes by entity/tag/region/theme and routed to watchlist tickers via graph path traversal (max 3 hops).
@@ -346,12 +380,19 @@ problem-first-AI-capstone-team13/
 ├── backend/
 │   ├── main.py               # FastAPI app — routes and pipeline invocation
 │   ├── config.py             # Env vars, LLM factory functions, Phoenix init
-│   ├── graph.py              # LangGraph 6-node workflow definition
+│   ├── graph_expansion.py    # LLM-driven exposure-graph expansion (runs on ticker-add)
 │   ├── ingestion.py          # Finnhub/Currents API clients + scenario replay
 │   ├── routing.py            # Exposure graph state + path traversal + scoring
 │   ├── memory.py             # In-memory catalyst ledger + local embedding/lexical dedup engine
 │   ├── seed_data.py          # Seeded exposure graph and replay scenario articles
-│   ├── persistence.py        # JSON file persistence helpers (not yet wired up)
+│   ├── persistence.py        # JSON file persistence for watchlist + graph + run results
+│   ├── iterations/
+│   │   ├── __init__.py       # Iteration selector/cacher for compiled LangGraph apps
+│   │   ├── common.py         # Shared schemas, prompts, and step helpers
+│   │   ├── iter1.py          # Direct-news workflow
+│   │   ├── iter2.py          # Direct-news + catalyst memory workflow
+│   │   └── iter3.py          # Cross-impact workflow with graph expansion inputs
+│   ├── state/                # Persisted state (watchlist.json, graph.json) — survives restarts
 │   ├── run_tests.py          # Unit test suite (3 end-to-end workflow tests)
 │   ├── requirements.txt      # Python dependencies (unpinned)
 │   ├── .env.example          # Environment variable template
@@ -370,8 +411,7 @@ problem-first-AI-capstone-team13/
 ├── research/
 │   └── codebase-research.md  # Full codebase research document
 ├── README.md
-├── implementation_plan.md
-└── final-capstone-system-design-FINAL-lean-per-ticker.md
+└── implementation_plan.md
 ```
 
 ---
@@ -413,5 +453,5 @@ Check the backend terminal for the Python traceback. Common causes:
 - The freshness filter only accepts articles published within the last `FRESHNESS_LOOKBACK_MINUTES` (default 10) minutes. Live news APIs may return articles older than this window.
 - Verify your `FINNHUB_API_KEY` and `CURRENTS_API_KEY` are set correctly. Check the backend terminal for API error messages.
 
-### Watchlist resets after restarting the backend
-This is expected — the watchlist is currently stored in memory only. A file-based persistence module exists at `backend/persistence.py` but is not yet connected to the running application.
+### Watchlist or exposure graph state
+The watchlist and the exposure graph are persisted to JSON files in `backend/state/` (`watchlist.json` and `graph.json`) and reloaded on startup, so they survive backend restarts. The catalyst ledger is **not** persisted — it lives in memory only, expires after 1 day, and can be cleared from the UI (**Reset Cache**) or via `POST /api/ledger/clear`. To start the graph from a clean curated seed, use the graph **Rebuild (reset)** action (`POST /api/graph/rebuild` with `reset=true`), which restores the seed and re-expands every watchlist ticker.

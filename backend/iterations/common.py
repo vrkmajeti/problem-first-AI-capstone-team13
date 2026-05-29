@@ -1,12 +1,20 @@
+"""Shared building blocks for the per-iteration pipelines.
+
+This module is the "common" layer: structured-output schemas, the workflow state,
+generic LLM helpers, and the parameterized algorithm helpers (fetch, extract, route,
+memory, synthesis, compliance) that each iteration module composes into its own chain.
+It contains NO `if iteration == N` branching — iteration-specific behavior is expressed
+by the explicit arguments the iteration modules pass (expand, cross_impact,
+restore_ledger, restore_indirect, focus block).
+"""
 import json
 import re
 from typing import TypedDict, List, Dict, Any, Tuple, Literal
 from pydantic import BaseModel, Field
-from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
 from backend.config import get_llm, get_llm_fast, FRESHNESS_LOOKBACK_MINUTES
 from backend.ingestion import get_news_payload
-from backend.routing import get_cross_impact_keywords, route_cross_impact, get_cross_impact_queries
+from backend.routing import route_cross_impact, get_cross_impact_queries
 from backend.memory import check_ledger_decision
 
 # ---------------------------------------------------------------------------
@@ -50,6 +58,7 @@ class ExtractionResult(BaseModel):
 
 
 class MainCatalystOut(BaseModel):
+    eventId: str = Field(description="The exact eventId of the corresponding event in the context")
     label: str = Field(description="Short catalyst title")
     relationshipType: Literal["direct", "indirect"]
     eventType: str
@@ -57,6 +66,7 @@ class MainCatalystOut(BaseModel):
     confidence: ConfidenceLevel
     recency: Literal["breaking", "recent", "background"]
     impactPath: List[str] = Field(description="Ordered list of nodes describing the impact path")
+    significance: int = Field(description="Significance score from 1 (low/negligible) to 10 (critical/existential) of this catalyst specifically for the ticker")
 
 
 class SynthesisOut(BaseModel):
@@ -82,6 +92,8 @@ class WorkflowState(TypedDict):
     ticker_syntheses: Dict[str, Dict[str, Any]]
     duplicate_counts: Dict[str, int]
     ingestion_metadata: Dict[str, Any]
+    expansion_keywords: List[str]  # Iter-3 cross-impact search terms derived from the exposure graph
+    expansion_tickers: List[str]   # Iter-3 peer tickers derived from the exposure graph
     llm_failed: bool  # Sentinel: set True if a critical LLM node fails; halts downstream LLM calls
     failure_reason: str  # Human-readable cause when llm_failed is True (distinguishes outage vs. bad output)
 
@@ -124,18 +136,32 @@ def invoke_with_retry(runnable, messages, label="LLM call"):
         print(f"  [retry] {label} failed ({e}); retrying once...")
         return runnable.invoke(messages)
 
-# 1. Fetch & Filter Node
-def fetch_and_filter_node(state: WorkflowState) -> Dict[str, Any]:
-    print("--- [Node 1: Fetching & Filtering News] ---")
-    iteration = state.get("iteration", 3)
+# 1. Fetch & Filter
+def run_fetch_and_filter(state: WorkflowState, expand: bool) -> Dict[str, Any]:
+    """Fetch news and apply the freshness window.
+
+    ``expand=True`` (iteration 3) widens the search using exposure-graph-derived
+    cross-impact keywords and peer tickers; otherwise only the watchlist is queried.
+    """
+    print(f"--- [Node 1: Fetching & Filtering News] (expand={expand}) ---")
+    try:
+        from opentelemetry import trace as otel_trace
+        span = otel_trace.get_current_span()
+    except Exception:
+        span = None
+
     watchlist = state.get("watchlist", [])
     scenario_id = state.get("scenario_id", "live")
     simulated_now = state.get("simulated_now", "2026-05-28T17:25:00Z")
-    
-    # Query expansion is only active in Iteration 3
+
+    if span and span.is_recording():
+        span.set_attribute("watchlist", watchlist)
+        span.set_attribute("scenario_id", scenario_id)
+
+    # Query expansion is only active when expand=True (iteration 3).
     cross_impact_keywords = []
     extra_tickers = []
-    if iteration == 3:
+    if expand:
         cross_impact_keywords, extra_tickers = get_cross_impact_queries(watchlist)
         print(f"Expanded search terms from exposure graph: {cross_impact_keywords}")
         print(f"Expanded peer tickers from exposure graph: {extra_tickers}")
@@ -148,13 +174,33 @@ def fetch_and_filter_node(state: WorkflowState) -> Dict[str, Any]:
         extra_tickers=extra_tickers
     )
     
+    total_ingested = payload.get("total_ingested", 0)
+    passed_freshness = payload.get("passed_freshness", 0)
+
+    if span and span.is_recording():
+        span.set_attribute("total_ingested", total_ingested)
+        span.set_attribute("passed_freshness", passed_freshness)
+        span.add_event("news_fetched", {
+            "total_fetched_articles": total_ingested,
+            "symbols_queried": watchlist + (extra_tickers or [])
+        })
+        span.add_event("freshness_filtering", {
+            "passed_freshness": passed_freshness,
+            "lookback_minutes": FRESHNESS_LOOKBACK_MINUTES
+        })
+
     return {
         "articles": payload["articles"],
         "ingestion_metadata": {
-            "total_ingested": payload["total_ingested"],
-            "passed_freshness": payload["passed_freshness"]
-        }
+            "total_ingested": total_ingested,
+            "passed_freshness": passed_freshness
+        },
+        # Persist the expansion terms so the extraction step can focus the LLM on them.
+        # Empty unless expand=True (iteration 3).
+        "expansion_keywords": cross_impact_keywords,
+        "expansion_tickers": extra_tickers,
     }
+
 
 MOCK_EVENTS = {
     "finnhub_direct_001": {
@@ -271,12 +317,72 @@ MOCK_EVENTS = {
     }
 }
 
-# 2. Canonical Event Extraction Node
-def canonical_event_extraction_node(state: WorkflowState) -> Dict[str, Any]:
+# 2. Canonical Event Extraction
+# Shared rule set (fixes the under-extraction where a weak model dropped almost every
+# article). The per-iteration FOCUS block is built separately by the focus helpers below.
+EXTRACTION_SYSTEM_PROMPT = """You are an expert financial news analyst. Your task is to analyze a list of news articles and extract a canonical structured event for EACH qualifying article, returned under the "events" field.
+
+What counts as an EVENT (extract these):
+- Earnings results or guidance changes; analyst-rating changes that cite a concrete new development.
+- News-driven price moves (a stock named as up/down on a specific cause).
+- M&A, partnerships, contracts, SEC filings, executive changes.
+- Regulatory, legal, or policy actions; product launches; supply-chain disruptions.
+- Macro shocks: interest rates, oil/commodities, geopolitics, index-level moves.
+
+What is NOISE (OMIT it entirely — do NOT return an event for it):
+- Pure opinion / recommendation listicles with no new fact ("3 stocks to buy now",
+  "where X will trade in 5 years", bare price-target musings, "is X a buy?").
+- Non-financial content (sports, lifestyle, unrelated world news, academic papers).
+Reserve eventType "other" for articles reporting a REAL development that doesn't fit the
+categories above — never as a dumping ground for opinion pieces.
+
+Field guidance:
+- eventTags: normalized keywords useful for graph matching (e.g. Taiwan, shipping, semiconductor, model release).
+- evidence: verbatim phrases copied from the article proving the hard facts.
+
+Strict Rules:
+1. COMPLETENESS: extract one event for EVERY qualifying article. Do NOT collapse the list to a single event when several articles qualify, and do NOT drop a qualifying article just to be brief.
+2. articleId: set each event's articleId to the EXACT "ARTICLE ID" shown for its source article, so it can be matched back. Never invent or reuse an id across events.
+3. Do NOT invent or extrapolate facts. Extract only what is written in the article text.
+4. The possibleDirectionalPressure must reflect short-term intraday influence.
+5. Do NOT provide buy or sell advice.
+"""
+
+
+def direct_focus(watchlist: List[str]) -> str:
+    """FOCUS block for direct-news iterations (1 & 2)."""
+    return (
+        "EXTRACTION FOCUS FOR THIS ITERATION:\n"
+        f"FOCUS TICKERS (always extract events for articles concerning these companies): {', '.join(watchlist) if watchlist else 'none'}\n"
+        "Prioritize direct company news for the FOCUS TICKERS. Broad macro items with no direct tie may be mapped to eventType \"other\".\n\n"
+    )
+
+
+def cross_impact_focus(watchlist: List[str], peer_tickers: List[str], themes: List[str]) -> str:
+    """FOCUS block for the cross-impact iteration (3): watchlist + exposure-graph peers/themes."""
+    return (
+        "EXTRACTION FOCUS FOR THIS ITERATION:\n"
+        f"FOCUS TICKERS (always extract events for articles concerning these companies): {', '.join(watchlist) if watchlist else 'none'}\n"
+        f"PEER TICKERS (exposure-graph neighbors — also extract events about these): {', '.join(peer_tickers) if peer_tickers else 'none'}\n"
+        f"CROSS-IMPACT THEMES (macro/sector signals that can indirectly affect the focus tickers — capture matching events even when the source ticker tag looks unrelated): {', '.join(themes) if themes else 'none'}\n\n"
+    )
+
+
+def run_extraction(state: WorkflowState, system_prompt: str, focus_block: str) -> Dict[str, Any]:
+    """Extract canonical events from the fetched articles using the given prompt + focus block."""
     print("--- [Node 2: Canonical Event Extraction] ---")
+    try:
+        from opentelemetry import trace as otel_trace
+        span = otel_trace.get_current_span()
+    except Exception:
+        span = None
+
     articles = state.get("articles", [])
     canonical_events = []
     
+    if span and span.is_recording():
+        span.set_attribute("articles_count", len(articles))
+        
     if not articles:
         print("No articles fetched to extract events from.")
         return {"canonical_events": []}
@@ -293,7 +399,6 @@ def canonical_event_extraction_node(state: WorkflowState) -> Dict[str, Any]:
             if art_id in MOCK_EVENTS:
                 event = copy_dict(MOCK_EVENTS[art_id])
             else:
-                # Generic fallback if custom articles are passed
                 event = {
                     "eventType": "other",
                     "eventSummary": art["headline"],
@@ -315,29 +420,19 @@ def canonical_event_extraction_node(state: WorkflowState) -> Dict[str, Any]:
             event["relatedTickers"] = art.get("relatedTickers", [])
             event["sourceUrl"] = art.get("url")
             event["sourceHeadline"] = art.get("headline")
+            event["publishedAt"] = art.get("publishedAt")
             
             canonical_events.append(event)
             print(f"Mock Extracted Event: {event['eventSummary']} (Type: {event['eventType']})")
             
+        if span and span.is_recording():
+            span.add_event("events_extracted", {
+                "extracted_count": len(canonical_events),
+                "use_mock": True
+            })
         return {"canonical_events": canonical_events}
 
     llm = get_llm_fast()
-    
-    # System instructions for batch canonical extraction.
-    # The output SHAPE is enforced by structured outputs (ExtractionResult schema),
-    # so the prompt only needs the semantic rules — not a JSON schema dump.
-    system_prompt = """You are an expert financial news analyst. Your task is to analyze a list of news articles and extract a canonical structured event for each relevant article, returned under the "events" field.
-
-Field guidance:
-- eventTags: normalized keywords useful for graph matching (e.g. Taiwan, shipping, semiconductor, model release).
-- evidence: verbatim phrases copied from the article proving the hard facts.
-
-Strict Rules:
-1. For each article in the input list, extract the corresponding event. If an article is completely irrelevant or noise, you may omit it or map it as eventType "other".
-2. Do NOT invent or extrapolate facts. Extract only what is written in the article text.
-3. The possibleDirectionalPressure must reflect short-term intraday influence.
-4. Do NOT provide buy or sell advice.
-"""
 
     # Reference time for computing article age
     ref_time = datetime_now()
@@ -346,15 +441,13 @@ Strict Rules:
         """Strips Finnhub-style trailing headline repetition from the summary field."""
         if not summary:
             return ""
-        # Finnhub often appends the full headline at the end of the summary text.
-        # Strip it if the summary ends with the headline (case-insensitive).
         stripped = summary.strip()
         if stripped.lower().endswith(headline.strip().lower()):
             stripped = stripped[: -len(headline.strip())].rstrip(" .,;")
         return stripped
 
     # Build the input message containing all articles
-    user_content = "Analyze the following news articles and return a JSON list of event objects:\n\n"
+    user_content = focus_block + "Analyze the following news articles and return a JSON list of event objects:\n\n"
     for i, art in enumerate(articles):
         headline = art['headline']
         raw_summary = art.get('summary', '')
@@ -376,10 +469,6 @@ SUMMARY: {summary}
 RELATED TICKERS IN SOURCE: {', '.join(art.get('relatedTickers', []))}
 \n"""
 
-    # The API call. A failure here means the LLM is genuinely unavailable
-    # (network error, auth, rate limit / quota). With structured outputs the decoder
-    # is grammar-constrained to ExtractionResult, so we get a validated object back
-    # and there is no separate JSON-parsing failure mode to misclassify as an outage.
     try:
         print(f"Calling LLM to extract events from {len(articles)} articles in one batch...")
         structured_llm = llm.with_structured_output(ExtractionResult)
@@ -396,7 +485,6 @@ RELATED TICKERS IN SOURCE: {', '.join(art.get('relatedTickers', []))}
         for event in extracted_events:
             art_id = event.get("articleId")
             if not art_id and len(articles) == 1:
-                # If LLM forgot the articleId but there was only one article, associate it
                 art_id = articles[0]["articleId"]
                 
             art = art_map.get(art_id)
@@ -406,17 +494,25 @@ RELATED TICKERS IN SOURCE: {', '.join(art.get('relatedTickers', []))}
                 event["relatedTickers"] = art.get("relatedTickers", [])
                 event["sourceUrl"] = art.get("url")
                 event["sourceHeadline"] = art.get("headline")
+                event["publishedAt"] = art.get("publishedAt")
                 canonical_events.append(event)
                 print(f"Extracted Event: {event['eventSummary']} (Type: {event['eventType']})")
             else:
                 print(f"Warning: Extracted event references unknown articleId: {art_id}")
                 
+        if span and span.is_recording():
+            span.add_event("events_extracted", {
+                "extracted_count": len(canonical_events),
+                "use_mock": False
+            })
+            
     except Exception as e:
-        # Halt downstream LLM steps (to avoid polluting the ledger) and report the REAL
-        # cause — an outage vs. a content/schema problem are reported differently.
         reason = classify_llm_failure(e, "news-analysis model")
         print(f"Node 2 event extraction failed: {e}")
         print("Setting llm_failed=True to halt downstream LLM steps.")
+        if span and span.is_recording():
+            span.set_attribute("llm_failed", True)
+            span.set_attribute("failure_reason", reason)
         return {
             "canonical_events": [],
             "llm_failed": True,
@@ -425,13 +521,28 @@ RELATED TICKERS IN SOURCE: {', '.join(art.get('relatedTickers', []))}
 
     return {"canonical_events": canonical_events, "llm_failed": False, "failure_reason": ""}
 
-# 3. Routing Node
-def routing_node(state: WorkflowState) -> Dict[str, Any]:
-    print("--- [Node 3: Candidate Routing] ---")
-    iteration = state.get("iteration", 3)
+
+# 3. Routing
+def route_events(state: WorkflowState, cross_impact: bool) -> Dict[str, Any]:
+    """Route canonical events to watchlist tickers.
+
+    Direct routing (source pre-tagged with a watchlist ticker) always runs.
+    ``cross_impact=True`` (iteration 3) additionally routes untickered events through the
+    exposure graph.
+    """
+    print(f"--- [Node 3: Candidate Routing] (cross_impact={cross_impact}) ---")
+    try:
+        from opentelemetry import trace as otel_trace
+        span = otel_trace.get_current_span()
+    except Exception:
+        span = None
+
     watchlist = state.get("watchlist", [])
     canonical_events = state.get("canonical_events", [])
     
+    if span and span.is_recording():
+        span.set_attribute("events_count", len(canonical_events))
+        
     routed_candidates = []
     
     for event in canonical_events:
@@ -439,7 +550,7 @@ def routing_node(state: WorkflowState) -> Dict[str, Any]:
         # Check if the source article was pre-tagged with a watchlist ticker
         for ticker in watchlist:
             if ticker in event.get("relatedTickers", []):
-                routed_candidates.append({
+                candidate = {
                     "candidateId": f"cand_{ticker}_{event['eventId'][:8]}",
                     "ticker": ticker,
                     "relationshipType": "direct",
@@ -447,11 +558,21 @@ def routing_node(state: WorkflowState) -> Dict[str, Any]:
                     "impactPath": [ticker],
                     "pathConfidence": 1.0,
                     "reasonForRouting": f"Directly tagged in news source for ticker {ticker}."
-                })
+                }
+                routed_candidates.append(candidate)
                 print(f"Direct Route: {event['eventSummary']} -> {ticker}")
                 
-        # B. Cross-Impact Graph Routing (Iteration 3 only)
-        if iteration == 3:
+                if span and span.is_recording():
+                    span.add_event("event_routing", {
+                        "event_id": event["eventId"],
+                        "ticker": ticker,
+                        "relationship_type": "direct",
+                        "path_confidence": 1.0,
+                        "impact_path": [ticker]
+                    })
+                    
+        # B. Cross-Impact Graph Routing (only when cross_impact=True / iteration 3)
+        if cross_impact:
             indirect_candidates = route_cross_impact(event, watchlist)
             for ic in indirect_candidates:
                 # Avoid duplicates with direct routing
@@ -460,51 +581,185 @@ def routing_node(state: WorkflowState) -> Dict[str, Any]:
                     routed_candidates.append(ic)
                     print(f"Cross-Impact Route: {event['eventSummary']} -> {ic['ticker']} via {ic['impactPath']} (Conf: {ic['pathConfidence']})")
                     
+                    if span and span.is_recording():
+                        span.add_event("event_routing", {
+                            "event_id": ic["eventId"],
+                            "ticker": ic["ticker"],
+                            "relationship_type": "indirect",
+                            "path_confidence": ic["pathConfidence"],
+                            "impact_path": ic["impactPath"]
+                        })
+                        
+    if span and span.is_recording():
+        span.set_attribute("routed_candidates_count", len(routed_candidates))
+        
     return {"routed_candidates": routed_candidates}
 
-# 4. Ledger Memory Node
-def ledger_memory_node(state: WorkflowState) -> Dict[str, Any]:
-    print("--- [Node 4: Ledger Memory Check] ---")
-    iteration = state.get("iteration", 2)
+# 4a. Catalyst Assignment (Iteration 1 only — no memory)
+def assign_new_catalysts(state: WorkflowState) -> Dict[str, Any]:
+    """Iteration 1 has no catalyst memory: every routed candidate becomes a fresh briefing.
+
+    Assigns catalyst ids / new-fact lists so downstream synthesis & display work, without
+    consulting or writing to the ledger store.
+    """
+    print("--- [Node 4: Catalyst Assignment (Iteration 1, no memory)] ---")
+    try:
+        from opentelemetry import trace as otel_trace
+        span = otel_trace.get_current_span()
+    except Exception:
+        span = None
+
     routed_candidates = state.get("routed_candidates", [])
     canonical_events = {e["eventId"]: e for e in state.get("canonical_events", [])}
-    
-    filtered_candidates = []
-    duplicate_counts = {}
-    
+
     for cand in routed_candidates:
         ticker = cand["ticker"]
         event_id = cand["eventId"]
         event = canonical_events[event_id]
-        
-        # Iteration 1 skips ledger memory, treating everything as a new briefing
-        if iteration == 1:
-            cand["ledgerDecision"] = "new"
-            cand["newFacts"] = event.get("hardFacts", [])
-            cand["catalystId"] = f"cat_{ticker}_{event_id[:8]}"
-            filtered_candidates.append(cand)
-            continue
-            
-        # Iterations 2 and 3 use Catalyst Memory
-        decision, cat_id, new_facts = check_ledger_decision(ticker, event)
+        cand["ledgerDecision"] = "new"
+        cand["newFacts"] = event.get("hardFacts", [])
+        cand["catalystId"] = f"cat_{ticker}_{event_id[:8]}"
+        if span and span.is_recording():
+            span.add_event("ledger_decision", {
+                "ticker": ticker,
+                "event_id": event_id,
+                "decision": "new",
+                "catalyst_id": cand["catalystId"],
+            })
+
+    return {"routed_candidates": routed_candidates, "duplicate_counts": {}}
+
+
+# 4b. Ledger Memory Dedup (Iterations 2 & 3)
+def run_ledger_dedup(state: WorkflowState) -> Dict[str, Any]:
+    print("--- [Node 4: Ledger Memory Check] ---")
+    try:
+        from opentelemetry import trace as otel_trace
+        span = otel_trace.get_current_span()
+    except Exception:
+        span = None
+
+    routed_candidates = state.get("routed_candidates", [])
+    canonical_events = {e["eventId"]: e for e in state.get("canonical_events", [])}
+
+    if span and span.is_recording():
+        span.set_attribute("candidates_count", len(routed_candidates))
+
+    filtered_candidates = []
+    duplicate_counts = {}
+
+    accepted_count = 0
+    duplicate_count = 0
+    update_count = 0
+    iteration = state.get("iteration", 2)
+
+    for cand in routed_candidates:
+        ticker = cand["ticker"]
+        event_id = cand["eventId"]
+        event = canonical_events[event_id]
+
+        # Catalyst Memory dedup (used by iterations 2 and 3)
+        decision, cat_id, new_facts = check_ledger_decision(ticker, event, iteration=iteration)
         cand["ledgerDecision"] = decision
         cand["newFacts"] = new_facts
         cand["catalystId"] = cat_id
         
         if decision == "duplicate":
             duplicate_counts[ticker] = duplicate_counts.get(ticker, 0) + 1
+            duplicate_count += 1
             print(f"Memory: Suppressing duplicate event for {ticker}. (Catalyst: {cat_id})")
         else:
+            if decision == "new":
+                accepted_count += 1
+            elif decision == "update":
+                update_count += 1
             filtered_candidates.append(cand)
             print(f"Memory: Accepted event for {ticker} as {decision.upper()}. (Catalyst: {cat_id})")
             
+        if span and span.is_recording():
+            span.add_event("ledger_decision", {
+                "ticker": ticker,
+                "event_id": event_id,
+                "decision": decision,
+                "catalyst_id": cat_id,
+                "new_facts_count": len(new_facts)
+            })
+            
+    if span and span.is_recording():
+        span.set_attribute("accepted_count", accepted_count)
+        span.set_attribute("duplicate_count", duplicate_count)
+        span.set_attribute("update_count", update_count)
+        
     return {"routed_candidates": filtered_candidates, "duplicate_counts": duplicate_counts}
 
-# 5. Per-Ticker Synthesis Node
-def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
-    print("--- [Node 5: Per-Ticker Synthesis] ---")
-    
-    # Halt: if Node 2 signalled LLM failure, skip synthesis entirely
+
+def _minutes_ago(iso_ts: str, ref_time) -> int:
+    """Whole minutes between an ISO timestamp and ref_time; -1 if missing/unparseable."""
+    from datetime import datetime, timezone
+    if not iso_ts:
+        return -1
+    try:
+        dt = datetime.fromisoformat(iso_ts.replace('Z', '+00:00')).astimezone(timezone.utc)
+        return int((ref_time - dt).total_seconds() / 60)
+    except Exception:
+        return -1
+
+
+def _normalize_timed_facts(facts: List[Any], fallback_ts: str = "") -> List[Dict[str, Any]]:
+    """
+    Coerce a hardFactsSeen list into [{'fact','publishedAt'}], where publishedAt is the source
+    news publication time. Accepts the current dict shape, the legacy `firstSeenAt`-keyed dict
+    shape, and legacy plain strings, applying fallback_ts when a per-fact timestamp is missing.
+    """
+    normalized = []
+    for f in facts or []:
+        if isinstance(f, dict):
+            ts = f.get("publishedAt") or f.get("firstSeenAt") or fallback_ts
+            normalized.append({"fact": f.get("fact", ""), "publishedAt": ts})
+        else:
+            normalized.append({"fact": f, "publishedAt": fallback_ts})
+    return normalized
+
+
+def _empty_state_summary(ticker: str, state: WorkflowState) -> str:
+    """Accurate 'no catalysts' copy that distinguishes the real cause.
+
+    The old wording always blamed the freshness window even when articles had cleared it
+    and were merely deduplicated or routed elsewhere. This separates the three causes.
+    """
+    metadata = state.get("ingestion_metadata", {})
+    total = metadata.get("total_ingested", 0)
+    passed = metadata.get("passed_freshness", 0)
+    dup = state.get("duplicate_counts", {}).get(ticker, 0)
+    if total == 0:
+        return "No news articles were ingested in this refresh."
+    if passed == 0:
+        return (f"Ingested {total} articles, but none passed the freshness filter "
+                f"(nothing published within the last {FRESHNESS_LOOKBACK_MINUTES} minutes). "
+                f"They were filtered out as older news.")
+    if dup > 0:
+        return "Known story threads only — no new developments since the last refresh."
+    return f"No catalysts routed to {ticker} in this refresh."
+
+
+# 5. Per-Ticker Synthesis
+def run_synthesis(state: WorkflowState, restore_ledger: bool, restore_indirect: bool) -> Dict[str, Any]:
+    """Build per-ticker context buckets and synthesize briefings.
+
+    Memory is bounded by explicit flags:
+      - ``restore_ledger=False`` (iteration 1): no memory at all — prior catalysts never
+        bleed into the run.
+      - ``restore_ledger=True, restore_indirect=False`` (iteration 2): restore direct
+        story threads only (cross-impact is an iteration-3 feature).
+      - ``restore_ledger=True, restore_indirect=True`` (iteration 3): restore everything.
+    """
+    print(f"--- [Node 5: Per-Ticker Synthesis] (restore_ledger={restore_ledger}, restore_indirect={restore_indirect}) ---")
+    try:
+        from opentelemetry import trace as otel_trace
+        span = otel_trace.get_current_span()
+    except Exception:
+        span = None
+
     if state.get("llm_failed", False):
         print("Skipping synthesis: upstream LLM failure detected (llm_failed=True).")
         watchlist = state.get("watchlist", [])
@@ -525,6 +780,9 @@ def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
                 "sourceArticleUrls": [],
                 "notFinancialAdvice": True
             }
+        if span and span.is_recording():
+            span.set_attribute("llm_failed", True)
+            span.set_attribute("failure_reason", reason)
         return {"ticker_buckets": {}, "ticker_syntheses": empty_syntheses}
 
     watchlist = state.get("watchlist", [])
@@ -532,6 +790,10 @@ def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
     duplicate_counts = state.get("duplicate_counts", {})
     canonical_events = {e["eventId"]: e for e in state.get("canonical_events", [])}
     
+    if span and span.is_recording():
+        span.set_attribute("watchlist", watchlist)
+        span.set_attribute("llm_failed", False)
+
     # 1. Create context buckets per ticker
     ticker_buckets = {}
     for ticker in watchlist:
@@ -542,23 +804,44 @@ def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
             "suppressedDuplicateCount": duplicate_counts.get(ticker, 0)
         }
         
+    # Active ledger powers BOTH the per-fact history attached to this run's catalysts and the
+    # 1B merge of still-live catalysts that weren't touched this run.
+    # Memory is bounded per iteration: iteration 1 has NO memory (it never reads the ledger),
+    # so prior catalysts cannot bleed into a no-memory run. Iterations 2 & 3 use it.
+    from backend.memory import get_ledger
+    iteration = state.get("iteration", 2)
+    active_ledger = get_ledger(iteration) if restore_ledger else []
+    ledger_by_catalyst = {e["catalystId"]: e for e in active_ledger}
+
     for cand in routed_candidates:
         ticker = cand["ticker"]
         event_id = cand["eventId"]
         event = canonical_events[event_id]
-        
+
+        # Prefer the catalyst's FULL accumulated fact history (with per-fact timestamps) from
+        # the ledger so the LLM sees the whole evolving story, not just this run's new facts.
+        # Iteration 1 / mock / no-ledger: stamp the current event's facts with the article time.
+        ledger_entry = ledger_by_catalyst.get(cand.get("catalystId"))
+        if ledger_entry and ledger_entry.get("hardFactsSeen"):
+            facts_timed = _normalize_timed_facts(ledger_entry["hardFactsSeen"], event.get("publishedAt", ""))
+        else:
+            facts_timed = _normalize_timed_facts(event.get("hardFacts", []), event.get("publishedAt", ""))
+
         event_entry = {
             "eventId": event_id,
+            "catalystId": cand.get("catalystId"),
             "eventType": event["eventType"],
             "headline": event.get("sourceHeadline", ""),
             "eventSummary": event["eventSummary"],
-            "hardFacts": cand.get("newFacts", event["hardFacts"]),
+            "hardFacts": [f["fact"] for f in facts_timed],
+            "hardFactsTimed": facts_timed,
             "possibleDirectionalPressure": event["possibleDirectionalPressure"],
             "sourceArticleIds": event["sourceArticleIds"],
             "sourceUrl": event.get("sourceUrl", ""),
-            "uncertaintyNotes": event.get("uncertaintyNotes", [])
+            "uncertaintyNotes": event.get("uncertaintyNotes", []),
+            "publishedAt": event.get("publishedAt", "")
         }
-        
+
         if cand["relationshipType"] == "direct":
             ticker_buckets[ticker]["directEvents"].append(event_entry)
         else:
@@ -567,7 +850,73 @@ def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
             event_entry["pathConfidence"] = cand["pathConfidence"]
             event_entry["pathStrength"] = cand.get("pathStrength", "strong")
             ticker_buckets[ticker]["crossImpactEvents"].append(event_entry)
+
+    # 1B. Merge active ledger entries for each ticker (keeps briefings active on refresh)
+    for ticker in watchlist:
+        ticker_ledger_entries = [
+            entry for entry in active_ledger 
+            if entry["ticker"] == ticker
+        ]
+        
+        seen_catalyst_ids = set()
+        for e in ticker_buckets[ticker]["directEvents"]:
+            if e.get("catalystId"):
+                seen_catalyst_ids.add(e["catalystId"])
+        for e in ticker_buckets[ticker]["crossImpactEvents"]:
+            if e.get("catalystId"):
+                seen_catalyst_ids.add(e["catalystId"])
+                
+        for entry in ticker_ledger_entries:
+            cat_id = entry["catalystId"]
+            if cat_id in seen_catalyst_ids:
+                continue
+
+            rel_type = entry.get("relationshipType", "direct")
+
+            # Iteration 2 restores direct-news memory only (cross-impact is an iteration-3
+            # feature), so do not restore indirect catalyst threads when restore_indirect is False.
+            if not restore_indirect and rel_type != "direct":
+                continue
+
+            entry_fallback_ts = entry.get("lastUpdatedAt") or entry.get("firstSeenAt") or ""
+            recon_facts_timed = _normalize_timed_facts(entry.get("hardFactsSeen", []), entry_fallback_ts)
+
+            # Event-level recency follows the most recent fact's NEWS time, so a refreshed
+            # catalyst is aged by when its latest development broke — not by our processing time.
+            fact_times = [f["publishedAt"] for f in recon_facts_timed if f.get("publishedAt")]
+            recon_published = max(fact_times) if fact_times else entry_fallback_ts
+
+            reconstructed_entry = {
+                "eventId": f"evt_{cat_id}",
+                "catalystId": cat_id,
+                "eventType": entry["eventType"],
+                "headline": entry.get("sourceHeadline", ""),
+                "eventSummary": entry["canonicalSummary"],
+                "hardFacts": [f["fact"] for f in recon_facts_timed],
+                "hardFactsTimed": recon_facts_timed,
+                "possibleDirectionalPressure": entry.get("possibleDirectionalPressure", "unclear"),
+                "sourceArticleIds": entry.get("memberArticleIds", []),
+                "sourceUrl": entry.get("sourceUrl", ""),
+                "uncertaintyNotes": entry.get("uncertaintyNotes", []),
+                "publishedAt": recon_published
+            }
             
+            if rel_type == "direct":
+                ticker_buckets[ticker]["directEvents"].append(reconstructed_entry)
+            else:
+                reconstructed_entry["impactPath"] = [entry["eventType"], ticker]
+                reconstructed_entry["reasonForRouting"] = "Restored from exposure graph memory."
+                reconstructed_entry["pathConfidence"] = 1.0
+                reconstructed_entry["pathStrength"] = "strong"
+                ticker_buckets[ticker]["crossImpactEvents"].append(reconstructed_entry)
+
+        if span and span.is_recording():
+            span.add_event("bucket_created", {
+                "ticker": ticker,
+                "direct_events_count": len(ticker_buckets[ticker]["directEvents"]),
+                "cross_impact_events_count": len(ticker_buckets[ticker]["crossImpactEvents"])
+            })
+
     # 2. Run synthesis via LLM (or mock) for each ticker
     ticker_syntheses = {}
     
@@ -575,18 +924,34 @@ def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
     from backend.config import GEMINI_API_KEY, OPENAI_API_KEY
     use_mock = not (GEMINI_API_KEY or OPENAI_API_KEY)
     
+    ref_time = datetime_now()
+
+    def annotate_event_recency(event: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Annotates an event copy for the synthesis prompt with:
+          - event-level `minutesAgo` (freshness of the catalyst thread), and
+          - per-fact ages: `hardFacts` is rewritten to [{'fact','minutesAgo'}] so the LLM can
+            weight individual sub-developments within the same catalyst by their own recency.
+        """
+        event["minutesAgo"] = _minutes_ago(
+            event.get("publishedAt", "") or event.get("lastUpdatedAt", "") or event.get("firstSeenAt", ""),
+            ref_time,
+        )
+        timed = event.get("hardFactsTimed")
+        if timed:
+            event["hardFacts"] = [
+                {"fact": f.get("fact", ""), "minutesAgo": _minutes_ago(f.get("publishedAt", ""), ref_time)}
+                for f in timed
+            ]
+        event.pop("hardFactsTimed", None)
+        return event
+
     if use_mock:
         print("No LLM API keys found. Falling back to rules-based mock synthesis.")
         for ticker, bucket in ticker_buckets.items():
             if not bucket["directEvents"] and not bucket["crossImpactEvents"]:
-                metadata = state.get("ingestion_metadata", {})
-                total = metadata.get("total_ingested", 0)
-                passed = metadata.get("passed_freshness", 0)
-                if total > 0 and passed == 0:
-                    situation_summary = f"Ingested {total} articles today, but 0 passed the freshness filter (none were published within the last {FRESHNESS_LOOKBACK_MINUTES} minutes). They were filtered out as older news."
-                else:
-                    situation_summary = f"No new catalysts were detected in the latest freshness window ({FRESHNESS_LOOKBACK_MINUTES} mins)."
-                    
+                situation_summary = _empty_state_summary(ticker, state)
+
                 ticker_syntheses[ticker] = {
                     "summaryId": f"sum_{ticker}_{int(datetime_now().timestamp())}",
                     "ticker": ticker,
@@ -601,6 +966,13 @@ def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
                     "sourceArticleUrls": [],
                     "notFinancialAdvice": True
                 }
+                if span and span.is_recording():
+                    span.add_event("ticker_synthesis", {
+                        "ticker": ticker,
+                        "status": "success",
+                        "has_catalysts": False,
+                        "mode": "mock"
+                    })
                 continue
                 
             print(f"Mock Synthesizing catalyst briefing for ticker: {ticker}")
@@ -639,20 +1011,27 @@ def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
             main_catalysts = []
             for de in bucket["directEvents"]:
                 main_catalysts.append({
+                    "eventId": de["eventId"],
                     "label": de["eventSummary"],
                     "relationshipType": "direct",
                     "eventType": de["eventType"],
                     "possibleInfluence": de["possibleDirectionalPressure"],
-                    "confidence": "high"
+                    "confidence": "high",
+                    "recency": "breaking",
+                    "impactPath": [ticker],
+                    "significance": 8 if de["possibleDirectionalPressure"] in ["positive", "negative"] else 4
                 })
             for ce in bucket["crossImpactEvents"]:
                 main_catalysts.append({
+                    "eventId": ce["eventId"],
                     "label": ce["eventSummary"],
                     "relationshipType": "indirect",
                     "eventType": ce["eventType"],
                     "possibleInfluence": ce["possibleDirectionalPressure"],
                     "confidence": "tentative",
-                    "impactPath": ce["impactPath"]
+                    "recency": "recent",
+                    "impactPath": ce["impactPath"],
+                    "significance": 6 if ce["possibleDirectionalPressure"] in ["positive", "negative"] else 3
                 })
                 
             # Gather uncertainties
@@ -662,7 +1041,6 @@ def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
             if not uncertainties:
                 uncertainties = ["General macroeconomic conditions and market volatility."]
             else:
-                # Deduplicate
                 uncertainties = list(set(uncertainties))
                 
             # Gather source URLs and IDs
@@ -677,7 +1055,7 @@ def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
                 "mainCatalysts": main_catalysts,
                 "overallPossibleInfluence": overall_influence,
                 "confidence": "tentative",
-                "uncertainties": uncertainties[:4], # Limit to 4 items
+                "uncertainties": uncertainties[:4],
                 "watchItems": [
                     f"{ticker} price and volume action",
                     f"Follow-up updates from related entities and supply partners"
@@ -687,6 +1065,14 @@ def per_ticker_synthesis_node(state: WorkflowState) -> Dict[str, Any]:
                 "notFinancialAdvice": True,
                 "complianceDisclaimer": "This is an informational briefing, not financial advice. The impact assessment is tentative and may be incomplete. Verify with market data and official sources before making decisions."
             }
+            if span and span.is_recording():
+                span.add_event("ticker_synthesis", {
+                    "ticker": ticker,
+                    "status": "success",
+                    "has_catalysts": True,
+                    "mode": "mock"
+                })
+
         return {"ticker_buckets": ticker_buckets, "ticker_syntheses": ticker_syntheses}
 
     llm = get_llm()
@@ -699,9 +1085,16 @@ RECENCY RULE: Weight events published more recently (lower minutesAgo) more heav
 For intraday trading, events < 30 minutes old are HIGH priority. Events 30-90 minutes old are MEDIUM priority.
 Events > 90 minutes old are BACKGROUND context — still relevant but should not dominate the headline.
 
+PER-FACT RECENCY: Within a single catalyst, each item in "hardFacts" carries its own "minutesAgo".
+A long-running catalyst accumulates facts over time: facts with low minutesAgo are the latest breaking
+developments and should drive the headline, while older facts in the same catalyst are prior context.
+Do not treat an older fact as if it just broke simply because it shares a catalyst with a fresh update.
+
 Field guidance (the output shape itself is enforced for you):
 - summaryHeadline: one concise headline summarizing the net catalyst situation.
 - situationSummary: a paragraph explaining what happened, referencing direct and indirect paths, and explicitly noting which catalysts are breaking vs. background.
+- mainCatalysts[].eventId: MUST be set to the exact eventId of the corresponding event from the CONTEXT BUCKET.
+- mainCatalysts[].significance: An integer from 1 (low/negligible impact) to 10 (critical/existential disruption) reflecting the net impact of this catalyst event specifically for the ticker being analyzed.
 - mainCatalysts[].impactPath: the ordered chain of nodes describing how the event reaches the ticker.
 - uncertainties / watchItems: specific signals, announcements, or price markers for the trader to monitor next.
 
@@ -715,7 +1108,7 @@ Strict Rules:
 1. ONLY utilize the facts provided in the prompt context. Do NOT invent companies, news, or metrics.
 2. If there are no new events in the direct or cross-impact arrays, output the following:
    - summaryHeadline: "No new catalysts detected"
-   - situationSummary: "No new catalysts were detected in the latest freshness window."
+   - situationSummary: "No new catalysts detected for this ticker in the latest refresh."
    - overallPossibleInfluence: "unclear"
    - confidence: "low"
    - mainCatalysts: []
@@ -723,31 +1116,9 @@ Strict Rules:
 4. Do NOT give investment or trading advice. Do NOT write "buy", "sell", "we recommend shorting".
 """
 
-    ref_time = datetime_now()
-
-    def annotate_event_recency(event: Dict[str, Any]) -> Dict[str, Any]:
-        """Adds minutesAgo field to an event dict for the synthesis prompt."""
-        try:
-            from datetime import datetime, timezone
-            # sourceHeadline events don't carry publishedAt — skip gracefully
-            pub_raw = event.get("publishedAt", "")
-            if pub_raw:
-                pub_dt = datetime.fromisoformat(pub_raw.replace('Z', '+00:00')).astimezone(timezone.utc)
-                event["minutesAgo"] = int((ref_time - pub_dt).total_seconds() / 60)
-        except Exception:
-            event["minutesAgo"] = -1
-        return event
-
     for ticker, bucket in ticker_buckets.items():
-        # Check if anything happened for this ticker
         if not bucket["directEvents"] and not bucket["crossImpactEvents"]:
-            metadata = state.get("ingestion_metadata", {})
-            total = metadata.get("total_ingested", 0)
-            passed = metadata.get("passed_freshness", 0)
-            if total > 0 and passed == 0:
-                situation_summary = f"Ingested {total} articles today, but 0 passed the freshness filter (none were published within the last {FRESHNESS_LOOKBACK_MINUTES} minutes). They were filtered out as older news."
-            else:
-                situation_summary = f"No new catalysts were detected in the latest freshness window ({FRESHNESS_LOOKBACK_MINUTES} mins)."
+            situation_summary = _empty_state_summary(ticker, state)
 
             ticker_syntheses[ticker] = {
                 "summaryId": f"sum_{ticker}_{int(datetime_now().timestamp())}",
@@ -763,11 +1134,34 @@ Strict Rules:
                 "sourceArticleUrls": [],
                 "notFinancialAdvice": True
             }
+            if span and span.is_recording():
+                span.add_event("ticker_synthesis", {
+                    "ticker": ticker,
+                    "status": "success",
+                    "has_catalysts": False,
+                    "mode": "llm"
+                })
             continue
 
-        # Annotate each event with its recency in minutes before sending to LLM
         annotated_bucket = dict(bucket)
         annotated_bucket["directEvents"] = [annotate_event_recency(dict(e)) for e in bucket["directEvents"]]
+        
+        filtered_cross = []
+        for e in bucket["crossImpactEvents"]:
+            path_strength = e.get("pathStrength")
+            status = "included" if path_strength == "strong" else "filtered_out"
+            if path_strength == "strong":
+                filtered_cross.append(e)
+            
+            if span and span.is_recording():
+                span.add_event("path_filtering", {
+                    "ticker": ticker,
+                    "event_id": e["eventId"],
+                    "path_score": e.get("pathConfidence", 0.0),
+                    "path_strength": path_strength or "weak",
+                    "status": status
+                })
+
         annotated_bucket["crossImpactEvents"] = [annotate_event_recency(dict(e)) for e in bucket["crossImpactEvents"]]
             
         print(f"Synthesizing catalyst briefing for ticker: {ticker}")
@@ -783,11 +1177,9 @@ Strict Rules:
             )
             synthesis = result.model_dump()
 
-            # Map additional metadata
             synthesis["summaryId"] = f"sum_{ticker}_{int(datetime_now().timestamp())}"
             synthesis["ticker"] = ticker
             
-            # Extract source IDs
             src_ids = []
             src_urls = []
             for de in bucket["directEvents"]:
@@ -802,11 +1194,17 @@ Strict Rules:
             synthesis["sourceEventIds"] = src_ids
             synthesis["sourceArticleUrls"] = list(set(src_urls))
             synthesis["notFinancialAdvice"] = True
-            
-            # Ensure compliance disclaimer is present
-            synthesis["complianceDisclaimer"] = "This is an informational briefing, not financial advice. The impact assessment is tentative and may be incomplete. Verify with market data and official sources before making decisions."
+            synthesis["complianceDisclaimer"] = "This is an informational briefing, not financial advice. The net impact assessment is tentative and may be incomplete. Verify with market data and official sources before making decisions."
             
             ticker_syntheses[ticker] = synthesis
+            
+            if span and span.is_recording():
+                span.add_event("ticker_synthesis", {
+                    "ticker": ticker,
+                    "status": "success",
+                    "has_catalysts": True,
+                    "mode": "llm"
+                })
         except Exception as e:
             reason = classify_llm_failure(e, "synthesis model")
             print(f"Error synthesizing briefing for {ticker}: {e}")
@@ -824,6 +1222,13 @@ Strict Rules:
                 "sourceArticleUrls": [],
                 "notFinancialAdvice": True
             }
+            if span and span.is_recording():
+                span.add_event("ticker_synthesis", {
+                    "ticker": ticker,
+                    "status": "failed",
+                    "mode": "llm",
+                    "error": str(e)
+                })
             
     return {"ticker_buckets": ticker_buckets, "ticker_syntheses": ticker_syntheses}
 
@@ -832,11 +1237,20 @@ def datetime_now():
     from datetime import datetime, timezone
     return datetime.now(timezone.utc)
 
-# 6. Compliance Gate Node
-def compliance_gate_node(state: WorkflowState) -> Dict[str, Any]:
+# 6. Compliance Gate
+def run_compliance_gate(state: WorkflowState) -> Dict[str, Any]:
     print("--- [Node 6: Compliance Gate Check] ---")
+    try:
+        from opentelemetry import trace as otel_trace
+        span = otel_trace.get_current_span()
+    except Exception:
+        span = None
+
     ticker_syntheses = state.get("ticker_syntheses", {})
     
+    if span and span.is_recording():
+        span.set_attribute("syntheses_count", len(ticker_syntheses))
+        
     # Simple rule-based compliance cleaner to ensure no buy/sell recommendations slip through
     forbidden_patterns = [
         (r'\bbuy\b', 'monitor'),
@@ -854,42 +1268,28 @@ def compliance_gate_node(state: WorkflowState) -> Dict[str, Any]:
         headline = syn_copy.get("summaryHeadline", "")
         summary = syn_copy.get("situationSummary", "")
         
+        violations_count = 0
         for pattern, replacement in forbidden_patterns:
+            violations_count += len(re.findall(pattern, headline, flags=re.IGNORECASE))
+            violations_count += len(re.findall(pattern, summary, flags=re.IGNORECASE))
+            
             headline = re.sub(pattern, replacement, headline, flags=re.IGNORECASE)
             summary = re.sub(pattern, replacement, summary, flags=re.IGNORECASE)
             
         syn_copy["summaryHeadline"] = headline
         syn_copy["situationSummary"] = summary
-        
-        # Enforce the flag
         syn_copy["notFinancialAdvice"] = True
         cleaned_syntheses[ticker] = syn_copy
         
+        if span and span.is_recording():
+            span.add_event("compliance_check", {
+                "ticker": ticker,
+                "violations_scrubbed_count": violations_count
+            })
+            
     return {"ticker_syntheses": cleaned_syntheses}
+
 
 def copy_dict(d):
     # Shallow copy for simplicity
     return {k: v for k, v in d.items()}
-
-# Construct LangGraph Workflow
-def build_workflow_graph() -> StateGraph:
-    workflow = StateGraph(WorkflowState)
-    
-    # Add Nodes
-    workflow.add_node("fetch_and_filter", fetch_and_filter_node)
-    workflow.add_node("extract_events", canonical_event_extraction_node)
-    workflow.add_node("route_events", routing_node)
-    workflow.add_node("check_ledger", ledger_memory_node)
-    workflow.add_node("synthesize_ticker_briefings", per_ticker_synthesis_node)
-    workflow.add_node("compliance_gate", compliance_gate_node)
-    
-    # Define Edges / Transitions
-    workflow.set_entry_point("fetch_and_filter")
-    workflow.add_edge("fetch_and_filter", "extract_events")
-    workflow.add_edge("extract_events", "route_events")
-    workflow.add_edge("route_events", "check_ledger")
-    workflow.add_edge("check_ledger", "synthesize_ticker_briefings")
-    workflow.add_edge("synthesize_ticker_briefings", "compliance_gate")
-    workflow.add_edge("compliance_gate", END)
-    
-    return workflow.compile()

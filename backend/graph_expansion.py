@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.config import GEMINI_API_KEY, OPENAI_API_KEY, get_llm
-from backend.graph import invoke_with_retry
+from backend.iterations.common import invoke_with_retry
 from backend.routing import get_graph, add_graph_node, add_graph_edge
 from backend.persistence import save_graph
 
@@ -201,6 +201,7 @@ Rules:
 5. Use only REAL, well-known entities. Do NOT invent companies.
 6. confidence reflects how directly the source moves this ticker intraday (0.9+ = near-certain causal link, 0.6 = relevant, 0.45 = plausible/marginal). Do not omit a real link just because it is secondary — grade it with a lower confidence instead.
 7. Every edge's fromNodeId and toNodeId must be either the new ticker node, one of your new nodes, or an existing nodeId from the provided list.
+8. EDGE DIRECTION: Point each edge FROM the cause/source node TO the affected node. For exposure/sensitivity edges (regional_exposure, technology_exposure, shipping_exposure, macro_sensitivity, sector_exposure, commodity_exposure), the region/theme/route/risk_factor/sector/commodity is the CAUSE (fromNodeId) and the company/ticker is the AFFECTED node (toNodeId). Do NOT reverse this (e.g., fromNodeId="region_United_States", toNodeId="ticker_MCD" is correct; fromNodeId="ticker_MCD", toNodeId="region_United_States" is incorrect).
 """
 
 
@@ -295,7 +296,7 @@ def expand_graph_for_ticker(ticker: str, force: bool = False) -> Dict[str, Any]:
 
     ticker_node_id = f"ticker_{ticker}"
     existing_nodes = get_graph()["nodes"]
-    already_present = any(n.get("ticker") == ticker for n in existing_nodes)
+    already_present = any(n.get("nodeType") == "ticker" and n.get("ticker") == ticker for n in existing_nodes)
 
     # Automatic expansion is once-per-ticker. A manual re-run (force=True) bypasses this.
     if already_present and not force:
@@ -305,9 +306,18 @@ def expand_graph_for_ticker(ticker: str, force: bool = False) -> Dict[str, Any]:
     # Demo/mock mode: no LLM available. Register the bare ticker node so cross-impact
     # routing has a valid target; richer links require API keys.
     if not (GEMINI_API_KEY or OPENAI_API_KEY):
-        add_graph_node(_bare_ticker_node(ticker))
-        print(f"[graph_expansion] No LLM keys configured — added bare node for {ticker} only.")
-        return {"ticker": ticker, "addedNodes": 1, "addedEdges": 0, "usedLLM": False}
+        bare_node = _bare_ticker_node(ticker)
+        matched_node = find_matching_node(bare_node, existing_nodes)
+        added_nodes = 1
+        if matched_node:
+            matched_node["nodeType"] = "ticker"
+            add_graph_node(matched_node)
+            added_nodes = 0
+            print(f"[graph_expansion] No LLM keys configured — upgraded existing node to ticker for {ticker}.")
+        else:
+            add_graph_node(bare_node)
+            print(f"[graph_expansion] No LLM keys configured — added bare node for {ticker} only.")
+        return {"ticker": ticker, "addedNodes": added_nodes, "addedEdges": 0, "usedLLM": False}
 
     # --- LLM-driven expansion ---
     existing_context = []
@@ -331,13 +341,50 @@ def expand_graph_for_ticker(ticker: str, force: bool = False) -> Dict[str, Any]:
     )
 
     try:
-        llm = get_llm().with_structured_output(GraphExpansionResult)
-        result: GraphExpansionResult = invoke_with_retry(
-            llm,
-            [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_prompt)],
-            label=f"graph expansion for {ticker}",
-        )
-        payload = result.model_dump()
+        from opentelemetry import trace as otel_trace
+        tracer = otel_trace.get_tracer("cross-impact-catalysts")
+        try:
+            from openinference.semconv.trace import SpanAttributes
+            OPENINFERENCE_SPAN_KIND = SpanAttributes.OPENINFERENCE_SPAN_KIND
+            INPUT_VALUE = SpanAttributes.INPUT_VALUE
+            OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
+        except ImportError:
+            OPENINFERENCE_SPAN_KIND = "openinference.span.kind"
+            INPUT_VALUE = "input.value"
+            OUTPUT_VALUE = "output.value"
+    except Exception:
+        tracer = None
+
+    try:
+        if tracer:
+            span_name = f"Graph Expansion LLM Call ({ticker})"
+            with tracer.start_as_current_span(span_name) as llm_span:
+                llm_span.set_attribute("ticker", ticker)
+                llm_span.set_attribute(OPENINFERENCE_SPAN_KIND, "LLM")
+                
+                # Tag with the LLM model name if available
+                base_llm = get_llm()
+                model_name = getattr(base_llm, "model_name", getattr(base_llm, "model", "unknown"))
+                llm_span.set_attribute("llm.model_name", model_name)
+                
+                llm_span.set_attribute(INPUT_VALUE, user_prompt)
+                
+                llm = base_llm.with_structured_output(GraphExpansionResult)
+                result: GraphExpansionResult = invoke_with_retry(
+                    llm,
+                    [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_prompt)],
+                    label=f"graph expansion for {ticker}",
+                )
+                payload = result.model_dump()
+                llm_span.set_attribute(OUTPUT_VALUE, json.dumps(payload))
+        else:
+            llm = get_llm().with_structured_output(GraphExpansionResult)
+            result: GraphExpansionResult = invoke_with_retry(
+                llm,
+                [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_prompt)],
+                label=f"graph expansion for {ticker}",
+            )
+            payload = result.model_dump()
     except Exception as e:
         raise GraphExpansionError(f"LLM expansion failed for {ticker}: {e}") from e
 
@@ -371,6 +418,8 @@ def expand_graph_for_ticker(ticker: str, force: bool = False) -> Dict[str, Any]:
             matched_node["queryTerms"] = list(set(matched_node.get("queryTerms", []) + n.get("queryTerms", [])))
             if n.get("ticker") and not matched_node.get("ticker"):
                 matched_node["ticker"] = n.get("ticker")
+            if n.get("nodeType") == "ticker":
+                matched_node["nodeType"] = "ticker"
                 
             # Save updated node
             add_graph_node(matched_node)
@@ -392,11 +441,13 @@ def expand_graph_for_ticker(ticker: str, force: bool = False) -> Dict[str, Any]:
         reference_nodes.append(new_node_dict)
 
     # Guarantee the ticker node exists even if the LLM omitted it.
-    if not any(n.get("ticker") == ticker for n in reference_nodes):
+    if not any(n.get("nodeType") == "ticker" and n.get("ticker") == ticker for n in reference_nodes):
         bare_node = _bare_ticker_node(ticker)
         matched_node = find_matching_node(bare_node, reference_nodes)
         if matched_node:
             resolved_node_ids[ticker_node_id] = matched_node["nodeId"]
+            matched_node["nodeType"] = "ticker"
+            add_graph_node(matched_node)
         else:
             clean_nodes.append(bare_node)
             seen_node_ids.add(ticker_node_id)
@@ -465,21 +516,55 @@ def process_ticker_expansion(ticker: str, force: bool = False) -> Dict[str, Any]
     records the outcome in the status store. Never raises — failures are surfaced via
     the status entry so the UI can offer a manual re-run.
     """
-    ticker = ticker.strip().upper()
-    _set_status(ticker, "running")
     try:
-        summary = expand_graph_for_ticker(ticker, force=force)
-        save_graph(get_graph())
-        final_status = "skipped" if summary.get("skipped") else "done"
-        _set_status(
-            ticker,
-            final_status,
-            addedNodes=summary.get("addedNodes", 0),
-            addedEdges=summary.get("addedEdges", 0),
-            usedLLM=summary.get("usedLLM", False),
-        )
-        return summary
-    except Exception as e:
-        print(f"[graph_expansion] Background expansion failed for {ticker}: {e}")
-        _set_status(ticker, "failed", error=str(e))
-        return {"ticker": ticker, "status": "failed", "error": str(e)}
+        from opentelemetry import trace as otel_trace
+        tracer = otel_trace.get_tracer("cross-impact-catalysts")
+        try:
+            from openinference.semconv.trace import SpanAttributes
+            OPENINFERENCE_SPAN_KIND = SpanAttributes.OPENINFERENCE_SPAN_KIND
+            INPUT_VALUE = SpanAttributes.INPUT_VALUE
+            OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
+        except ImportError:
+            OPENINFERENCE_SPAN_KIND = "openinference.span.kind"
+            INPUT_VALUE = "input.value"
+            OUTPUT_VALUE = "output.value"
+    except Exception:
+        tracer = None
+
+    def _run():
+        tk = ticker.strip().upper()
+        _set_status(tk, "running")
+        try:
+            summary = expand_graph_for_ticker(tk, force=force)
+            save_graph(get_graph())
+            final_status = "skipped" if summary.get("skipped") else "done"
+            _set_status(
+                tk,
+                final_status,
+                addedNodes=summary.get("addedNodes", 0),
+                addedEdges=summary.get("addedEdges", 0),
+                usedLLM=summary.get("usedLLM", False),
+            )
+            return summary
+        except Exception as e:
+            print(f"[graph_expansion] Background expansion failed for {tk}: {e}")
+            _set_status(tk, "failed", error=str(e))
+            return {"ticker": tk, "status": "failed", "error": str(e)}
+
+    if tracer:
+        span_name = "Graph Building: Entity Cross-Relationships"
+        with tracer.start_as_current_span(span_name) as span:
+            span.set_attribute("ticker", ticker)
+            span.set_attribute("force", force)
+            span.set_attribute(OPENINFERENCE_SPAN_KIND, "CHAIN")
+            span.set_attribute(INPUT_VALUE, json.dumps({"ticker": ticker, "force": force}))
+            
+            res = _run()
+            
+            span.set_attribute("status", res.get("status", "done"))
+            span.set_attribute("added_nodes", res.get("addedNodes", 0))
+            span.set_attribute("added_edges", res.get("addedEdges", 0))
+            span.set_attribute(OUTPUT_VALUE, json.dumps(res))
+            return res
+    else:
+        return _run()

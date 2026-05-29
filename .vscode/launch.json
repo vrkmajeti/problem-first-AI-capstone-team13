@@ -5,8 +5,17 @@
       "name": "Backend: FastAPI Server",
       "type": "debugpy",
       "request": "launch",
-      "module": "backend.main",
-      "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+      "module": "uvicorn",
+      "args": ["backend.main:app", "--host", "0.0.0.0", "--port", "8000"],
+      "windows": {
+        "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe"
+      },
+      "osx": {
+        "python": "${workspaceFolder}/backend/.venv/bin/python"
+      },
+      "linux": {
+        "python": "${workspaceFolder}/backend/.venv/bin/python"
+      },
       "cwd": "${workspaceFolder}",
       "env": {
         "PYTHONIOENCODING": "utf-8"
@@ -19,7 +28,15 @@
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/backend/run_tests.py",
-      "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+      "windows": {
+        "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe"
+      },
+      "osx": {
+        "python": "${workspaceFolder}/backend/.venv/bin/python"
+      },
+      "linux": {
+        "python": "${workspaceFolder}/backend/.venv/bin/python"
+      },
       "cwd": "${workspaceFolder}",
       "env": {
         "PYTHONIOENCODING": "utf-8"
@@ -29,26 +46,21 @@
     },
     {
       "name": "Frontend: Vite React Server",
-      "type": "node",
+      "type": "node-terminal",
       "request": "launch",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "cwd": "${workspaceFolder}/frontend",
-      "console": "integratedTerminal"
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/frontend"
     },
     {
       "name": "Tracing: Arize Phoenix Server",
-      "type": "debugpy",
+      "type": "node-terminal",
       "request": "launch",
-      "module": "phoenix.server.main",
-      "args": ["serve"],
-      "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+      "command": "./backend/.venv/Scripts/python.exe ./backend/run_phoenix.py serve",
       "cwd": "${workspaceFolder}",
       "env": {
         "PYTHONIOENCODING": "utf-8",
         "PHOENIX_HOST": "127.0.0.1"
-      },
-      "console": "integratedTerminal"
+      }
     }
   ],
   "compounds": [
@@ -58,7 +70,8 @@
         "Backend: FastAPI Server",
         "Frontend: Vite React Server",
         "Tracing: Arize Phoenix Server"
-      ]
+      ],
+      "stopAll": false
     }
   ]
 }

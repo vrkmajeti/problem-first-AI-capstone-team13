@@ -75,3 +75,35 @@ def save_graph(graph: Dict[str, Any]):
             json.dump(graph, f, indent=2)
     except Exception as e:
         print(f"[persistence] Failed to save graph: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Per-iteration run results persistence
+# ---------------------------------------------------------------------------
+
+_RUN_RESULTS_FILE = os.path.join(_STATE_DIR, "run_results.json")
+
+
+def load_run_results() -> Dict[str, Any]:
+    """Loads the persisted run results dict, or returns empty dict if none exists."""
+    _ensure_state_dir()
+    if not os.path.exists(_RUN_RESULTS_FILE):
+        return {}
+    try:
+        with open(_RUN_RESULTS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        print(f"[persistence] Loaded latest run results from disk")
+        return data
+    except Exception as e:
+        print(f"[persistence] Failed to load run results: {e}")
+        return {}
+
+
+def save_run_results(results: Dict[str, Any]):
+    """Persists the run results dict to disk."""
+    _ensure_state_dir()
+    try:
+        with open(_RUN_RESULTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(results, f, indent=2)
+    except Exception as e:
+        print(f"[persistence] Failed to save run results: {e}")

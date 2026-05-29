@@ -1,6 +1,34 @@
 from typing import List, Dict, Any, Set
 import copy
+import re
 from backend.seed_data import EXPOSURE_GRAPH
+
+def _is_match(event_term: str, node_text: str) -> bool:
+    event_term = event_term.strip().lower()
+    node_text = node_text.strip().lower()
+    
+    if not event_term or not node_text:
+        return False
+        
+    # Exact match
+    if event_term == node_text:
+        return True
+        
+    # Word boundary match (highly robust and avoids substring issues like "ai" in "taiwan" or "hon hai")
+    pattern = r'\b' + re.escape(event_term) + r'\b'
+    if re.search(pattern, node_text):
+        return True
+        
+    # Plural/Singular stem matching for terms of length >= 4
+    if len(event_term) >= 4:
+        # Check if one is a plural/singular variation of the other
+        if event_term.endswith('s') and event_term[:-1] == node_text:
+            return True
+        if node_text.endswith('s') and node_text[:-1] == event_term:
+            return True
+            
+    return False
+
 
 # In-memory storage for exposure graph, initialized with seed data
 _graph_store = copy.deepcopy(EXPOSURE_GRAPH)
@@ -118,10 +146,45 @@ def find_paths_to_watchlist(start_node_id: str, watchlist_node_ids: Set[str], ma
     Finds all paths of length <= max_hops from start_node_id to any node in watchlist_node_ids.
     Returns a list of paths, where each path is a list of edge dicts.
     """
+    nodes = {n["nodeId"]: n for n in _graph_store["nodes"]}
     edges = _graph_store["edges"]
+    company_types = {"ticker", "private_company"}
     
     # Simple BFS/DFS pathfinding
     paths = []
+    
+    def is_allowed_transition(current_id: str, neighbor_id: str, edge: Dict[str, Any]) -> bool:
+        c_node = nodes.get(current_id)
+        n_node = nodes.get(neighbor_id)
+        if not c_node or not n_node:
+            return False
+            
+        c_type = c_node.get("nodeType")
+        n_type = n_node.get("nodeType")
+        
+        # If it is an exposure/sensitivity edge:
+        if edge.get("edgeType") in {
+            "regional_exposure", "technology_exposure", "shipping_exposure", 
+            "macro_sensitivity", "sector_exposure", "commodity_exposure"
+        }:
+            is_c_company = c_type in company_types
+            is_n_company = n_type in company_types
+            
+            if is_c_company and not is_n_company:
+                # Company -> Macro transition is NOT allowed for exposure edges (exposure flows macro -> company)
+                return False
+                
+            if not is_c_company and is_n_company:
+                # Macro -> Company transition IS allowed
+                return True
+                
+            if not is_c_company and not is_n_company:
+                # Both are macro nodes. Follow the edge's original direction.
+                # Traverse only if current_id is the original fromNodeId and neighbor_id is the original toNodeId
+                return edge.get("fromNodeId") == current_id and edge.get("toNodeId") == neighbor_id
+                
+        # For company-to-company edges (supplier_of, customer_of, competitor_of, partner_of), bi-directional is fine.
+        return True
     
     def dfs(current_id: str, current_path: List[Dict[str, Any]], visited: Set[str]):
         if len(current_path) > max_hops:
@@ -138,13 +201,15 @@ def find_paths_to_watchlist(start_node_id: str, watchlist_node_ids: Set[str], ma
         for edge in edges:
             f, t = edge["fromNodeId"], edge["toNodeId"]
             if f == current_id and t not in visited:
-                dfs(t, current_path + [edge], visited | {t})
+                if is_allowed_transition(current_id, t, edge):
+                    dfs(t, current_path + [edge], visited | {t})
             elif t == current_id and f not in visited:
                 # Reverse edge traversal is valid since relationship is bi-directional exposure
                 # We create a reversed version of the edge for path building
-                rev_edge = copy.deepcopy(edge)
-                rev_edge["fromNodeId"], rev_edge["toNodeId"] = t, f
-                dfs(f, current_path + [rev_edge], visited | {f})
+                if is_allowed_transition(current_id, f, edge):
+                    rev_edge = copy.deepcopy(edge)
+                    rev_edge["fromNodeId"], rev_edge["toNodeId"] = t, f
+                    dfs(f, current_path + [rev_edge], visited | {f})
                 
     dfs(start_node_id, [], {start_node_id})
     return paths
@@ -176,7 +241,7 @@ def route_cross_impact(canonical_event: Dict[str, Any], watchlist: List[str]) ->
     
     event_terms = set(event_entities + event_tags + event_regions + event_themes)
     
-    # Check node match
+    # Check node match using word-boundary and stem matching
     for node_id, node in nodes.items():
         node_name_lower = node["name"].lower()
         node_aliases_lower = [a.lower() for a in node.get("aliases", [])]
@@ -184,16 +249,14 @@ def route_cross_impact(canonical_event: Dict[str, Any], watchlist: List[str]) ->
         if node.get("ticker"):
             node_terms.append(node["ticker"].lower())
         
-        # If any query terms match
+        matched = False
         for term in node_terms:
-            if term in event_terms:
-                matched_node_ids.add(node_id)
-                break
-        
-        # Check substring match for safety
-        for et in event_terms:
-            if et in node_name_lower or any(et in a for a in node_aliases_lower) or (node.get("ticker") and et in node["ticker"].lower()):
-                matched_node_ids.add(node_id)
+            for et in event_terms:
+                if _is_match(et, term):
+                    matched_node_ids.add(node_id)
+                    matched = True
+                    break
+            if matched:
                 break
                 
     candidates = []
@@ -273,3 +336,4 @@ def route_cross_impact(canonical_event: Dict[str, Any], watchlist: List[str]) ->
             best_candidates[key] = cand
             
     return list(best_candidates.values())
+

@@ -27,7 +27,6 @@ backend/.env
 .env.production.local
 
 # IDE and Editor configs (keeping launch.json and tasks.json for sharing, ignoring user specific)
-.vscode/settings.json
 .vscode/tasks.log
 .idea/
 *.suo
