@@ -54,15 +54,15 @@ VS Code: Use the compound launch **"Full Application (Backend + Frontend + Traci
 
 ## Architecture
 
-### Pipeline (LangGraph, 6 nodes in `backend/graph.py`)
+### Pipeline (LangGraph, 6 nodes per iteration in `backend/iterations/`)
 
 ```
-Node 1: fetch_and_filter_node     — Finnhub + Currents APIs, freshness filter
-Node 2: canonical_event_extraction_node — LLM extracts structured events from articles
-Node 3: routing_node              — direct routes + cross-impact via exposure graph
-Node 4: ledger_memory_node        — embedding dedup, suppresses/flags updates
-Node 5: per_ticker_synthesis_node — LLM generates one briefing per ticker
-Node 6: compliance_gate_node      — regex scrubs financial-advice language
+Node 1: fetch_and_filter      — Finnhub + Currents APIs, freshness filter
+Node 2: extract               — LLM extracts structured events from articles
+Node 3: route                 — direct routes + cross-impact via exposure graph
+Node 4: ledger_dedup          — embedding dedup, suppresses/flags updates
+Node 5: per_ticker_synthesis  — LLM generates one briefing per ticker
+Node 6: compliance_gate       — regex scrubs financial-advice language
 ```
 
 LLM handles extraction and explanation; all routing, graph traversal, dedup, and compliance are deterministic code.
@@ -71,15 +71,17 @@ LLM handles extraction and explanation; all routing, graph traversal, dedup, and
 
 | File | Responsibility |
 |---|---|
-| `backend/main.py` | FastAPI server, 11 REST endpoints, in-memory watchlist/ledger state |
-| `backend/graph.py` | LangGraph pipeline definition, state schema, mock/LLM branching |
+| `backend/main.py` | FastAPI server, REST endpoints, in-memory watchlist/ledger state |
+| `backend/iterations/common.py` | Shared LangGraph node functions, structured-output schemas (`ExtractionResult`, `SynthesisOut`), `WorkflowState` |
+| `backend/iterations/iter1.py` `iter2.py` `iter3.py` | Per-iteration LangGraph app builders; `get_workflow(n)` in `__init__.py` returns cached compiled chain |
+| `backend/graph_expansion.py` | LLM-driven background task: when a ticker is added, discovers causal exposures and merges nodes/edges into the live graph |
 | `backend/ingestion.py` | Finnhub and Currents API clients, freshness filter, `clean_summary()` |
 | `backend/routing.py` | In-memory exposure graph, 2-hop BFS keyword expansion, DFS path scoring |
 | `backend/memory.py` | Catalyst ledger, fastembed local embeddings, cosine/lexical dedup (threshold 0.75) |
 | `backend/seed_data.py` | Static `EXPOSURE_GRAPH` (13 nodes/edges) and `SCENARIOS` (3 replay scenarios) |
 | `backend/config.py` | Env vars, `get_llm()` / `get_llm_fast()` factory, Phoenix OpenTelemetry init |
-| `backend/run_tests.py` | 3 unittest cases with mocked LLM (`@patch('backend.graph.get_llm')`) |
-| `backend/persistence.py` | JSON file I/O — **built but not imported anywhere; watchlist/graph reset on every restart** |
+| `backend/persistence.py` | JSON file I/O to `backend/state/` — watchlist, graph, and run results survive restarts |
+| `backend/run_tests.py` | 3 unittest cases with mocked LLM |
 
 ### Frontend
 
@@ -89,7 +91,7 @@ LLM handles extraction and explanation; all routing, graph traversal, dedup, and
 
 1. `GEMINI_API_KEY` set → Gemini 2.5-flash (extraction + synthesis)
 2. `OPENAI_API_KEY` set → gpt-4.1-nano (extraction) + gpt-4o-mini (synthesis)
-3. Neither → `MOCK_EVENTS` dict + rules-based synthesis (no API calls; used in tests)
+3. Neither → mock events + rules-based synthesis (no API calls; used in tests)
 
 If Node 2 extraction fails (rate-limit, timeout), `llm_failed=True` is set, downstream nodes produce no output, and `main.py` rolls back the ledger to its pre-run snapshot.
 
@@ -99,17 +101,17 @@ If Node 2 extraction fails (rate-limit, timeout), `llm_failed=True` is set, down
 - 13 edges with `confidence` (0.80–0.99) and `type` (supplier_of, technology_exposure, regional_exposure, shipping_exposure, macro_sensitivity)
 - Cross-impact routing: DFS up to 3 hops; route fires if `event_severity × avg_edge_confidence × path_shortness_bonus ≥ 0.45`
 - Modify via `seed_data.EXPOSURE_GRAPH` or runtime API (`POST /api/graph/node`, `POST /api/graph/edge`)
+- When a new ticker is added via the watchlist API, `graph_expansion.py` runs as a FastAPI background task to discover and merge new nodes/edges automatically
 
 ## Test Setup
 
 Tests in `backend/run_tests.py` (`class TestWorkflow`):
 - `setUp()` clears the ledger and rebuilds the LangGraph workflow before each test
-- LLM is mocked via `@patch('backend.graph.get_llm')`; the mock inspects system/user message content to return correct fixture data
-- Node 2 uses `MOCK_EVENTS` automatically when no API keys are present
+- LLM is mocked via `@patch('backend.iterations.common.get_llm')` and `@patch('backend.iterations.common.get_llm_fast')`; the mock dispatches on the structured-output schema type (`ExtractionResult` vs `SynthesisOut`) rather than prompt substrings
+- Tests run entirely without API keys (mock mode)
 
 ## Known Limitations
 
-- **Persistence not wired**: watchlist and exposure graph reset to hardcoded defaults on every backend restart (`persistence.py` exists but is unused)
 - **No scheduled polling**: runs are manually triggered from the UI
 - **Wide-open CORS**: `allow_origins=["*"]` — not for production
 - **Freshness window**: default 10 min; capstone demo uses 120 min (`FRESHNESS_LOOKBACK_MINUTES` env var)
