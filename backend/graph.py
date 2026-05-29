@@ -6,7 +6,7 @@ from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
 from backend.config import get_llm, get_llm_fast, FRESHNESS_LOOKBACK_MINUTES
 from backend.ingestion import get_news_payload
-from backend.routing import get_cross_impact_keywords, route_cross_impact
+from backend.routing import get_cross_impact_keywords, route_cross_impact, get_cross_impact_queries
 from backend.memory import check_ledger_decision
 
 # ---------------------------------------------------------------------------
@@ -134,15 +134,18 @@ def fetch_and_filter_node(state: WorkflowState) -> Dict[str, Any]:
     
     # Query expansion is only active in Iteration 3
     cross_impact_keywords = []
+    extra_tickers = []
     if iteration == 3:
-        cross_impact_keywords = get_cross_impact_keywords(watchlist)
+        cross_impact_keywords, extra_tickers = get_cross_impact_queries(watchlist)
         print(f"Expanded search terms from exposure graph: {cross_impact_keywords}")
+        print(f"Expanded peer tickers from exposure graph: {extra_tickers}")
         
     payload = get_news_payload(
         symbol_watchlist=watchlist,
         cross_impact_keywords=cross_impact_keywords,
         scenario_id=scenario_id,
-        simulated_now_str=simulated_now
+        simulated_now_str=simulated_now,
+        extra_tickers=extra_tickers
     )
     
     return {

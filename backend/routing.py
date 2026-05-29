@@ -44,24 +44,25 @@ def reset_graph() -> Dict[str, Any]:
     _graph_store = copy.deepcopy(EXPOSURE_GRAPH)
     return _graph_store
 
-def get_cross_impact_keywords(watchlist: List[str]) -> List[str]:
+from typing import Tuple
+
+def get_cross_impact_queries(watchlist: List[str]) -> Tuple[List[str], List[str]]:
     """
     Finds keywords and query terms from nearby nodes connected to watchlist tickers in the exposure graph.
     Traverses the graph in reverse (from tickers outwards up to 2 hops) to find relevant search terms.
+    Returns a tuple: (cross_impact_keywords, extra_tickers)
     """
     nodes = {n["nodeId"]: n for n in _graph_store["nodes"]}
     edges = _graph_store["edges"]
     
     # Find start nodes corresponding to the watchlist tickers
     watchlist_node_ids = set()
-    ticker_to_node = {}
     for node_id, node in nodes.items():
-        if node["nodeType"] == "ticker" and node["name"] in watchlist:
+        if node["nodeType"] == "ticker" and node.get("ticker") in watchlist:
             watchlist_node_ids.add(node_id)
-            ticker_to_node[node["name"]] = node_id
             
     if not watchlist_node_ids:
-        return []
+        return [], []
         
     # Collect query terms from these nodes and their 1-hop and 2-hop neighbors
     relevant_nodes = set(watchlist_node_ids)
@@ -88,17 +89,29 @@ def get_cross_impact_keywords(watchlist: List[str]) -> List[str]:
             
     relevant_nodes.update(neighbors_2)
     
-    # Collect query terms
+    # Collect query terms and extra tickers
     keywords = set()
+    extra_tickers = set()
     for node_id in relevant_nodes:
         node = nodes[node_id]
-        # Skip the watchlist tickers themselves to avoid redundant search
-        if node["nodeType"] == "ticker":
-            continue
-        # Add aliases and queryTerms
+        # Include company name, aliases, and query terms to search Currents by name
         keywords.update(node.get("queryTerms", []))
+        keywords.add(node["name"])
+        keywords.update(node.get("aliases", []))
         
-    return list(keywords)
+        # If this node represents a company with a ticker and is not on the watchlist,
+        # collect its ticker to query Finnhub
+        node_ticker = node.get("ticker")
+        if node_ticker and node_ticker not in watchlist:
+            extra_tickers.add(node_ticker)
+            
+    return list(keywords), list(extra_tickers)
+
+
+def get_cross_impact_keywords(watchlist: List[str]) -> List[str]:
+    """Finds keywords and query terms from nearby nodes. Maintained for backward compatibility."""
+    keywords, _ = get_cross_impact_queries(watchlist)
+    return keywords
 
 def find_paths_to_watchlist(start_node_id: str, watchlist_node_ids: Set[str], max_hops: int = 3) -> List[List[Dict[str, Any]]]:
     """
@@ -145,9 +158,9 @@ def route_cross_impact(canonical_event: Dict[str, Any], watchlist: List[str]) ->
     ticker_to_node = {}
     
     for node_id, node in nodes.items():
-        if node["nodeType"] == "ticker" and node["name"] in watchlist:
+        if node["nodeType"] == "ticker" and node.get("ticker") in watchlist:
             watchlist_node_ids.add(node_id)
-            ticker_to_node[node["name"]] = node_id
+            ticker_to_node[node.get("ticker")] = node_id
             
     if not watchlist_node_ids:
         return []
@@ -168,6 +181,8 @@ def route_cross_impact(canonical_event: Dict[str, Any], watchlist: List[str]) ->
         node_name_lower = node["name"].lower()
         node_aliases_lower = [a.lower() for a in node.get("aliases", [])]
         node_terms = [node_name_lower] + node_aliases_lower
+        if node.get("ticker"):
+            node_terms.append(node["ticker"].lower())
         
         # If any query terms match
         for term in node_terms:
@@ -177,7 +192,7 @@ def route_cross_impact(canonical_event: Dict[str, Any], watchlist: List[str]) ->
         
         # Check substring match for safety
         for et in event_terms:
-            if et in node_name_lower or any(et in a for a in node_aliases_lower):
+            if et in node_name_lower or any(et in a for a in node_aliases_lower) or (node.get("ticker") and et in node["ticker"].lower()):
                 matched_node_ids.add(node_id)
                 break
                 
@@ -197,7 +212,7 @@ def route_cross_impact(canonical_event: Dict[str, Any], watchlist: List[str]) ->
                 path_nodes.append(edge["toNodeId"])
                 
             final_node_id = path_nodes[-1]
-            target_ticker = nodes[final_node_id]["name"]
+            target_ticker = nodes[final_node_id].get("ticker") or nodes[final_node_id]["name"]
             
             # Calculate path score
             # path_score = event_severity * average_edge_confidence * path_shortness_bonus
@@ -223,7 +238,7 @@ def route_cross_impact(canonical_event: Dict[str, Any], watchlist: List[str]) ->
                 path_shortness_bonus = 0.75
                 
             path_score = event_severity * average_edge_confidence * path_shortness_bonus
-
+ 
             # Route if path score >= 0.45; tag "strong" (>=0.70) vs "weak" (0.45-0.69)
             # so the synthesis LLM can treat marginal paths as watch items, not primary catalysts
             if path_score >= 0.45:
@@ -235,10 +250,10 @@ def route_cross_impact(canonical_event: Dict[str, Any], watchlist: List[str]) ->
                     to_name = nodes[edge["toNodeId"]]["name"]
                     rel_type = edge["edgeType"]
                     explanations.append(f"{from_name} ({rel_type}) -> {to_name}. {notes}")
-
+ 
                 reason_for_routing = "; ".join(explanations)
                 path_strength = "strong" if path_score >= 0.70 else "weak"
-
+ 
                 candidates.append({
                     "candidateId": f"cand_{target_ticker}_{canonical_event.get('eventId', '')[:8]}",
                     "ticker": target_ticker,

@@ -114,7 +114,8 @@ def get_news_payload(
     symbol_watchlist: List[str], 
     cross_impact_keywords: List[str], 
     scenario_id: str = "live",
-    simulated_now_str: str = "2026-05-28T17:25:00Z"
+    simulated_now_str: str = "2026-05-28T17:25:00Z",
+    extra_tickers: List[str] = None
 ) -> Dict[str, Any]:
     """
     Fetches news from either live APIs or scenario mock data.
@@ -136,9 +137,13 @@ def get_news_payload(
         print(f"Simulating time: {reference_time.isoformat()}")
     else:
         # Fetch Live
-        print(f"Live Ingestion Active. Tickers: {symbol_watchlist}. Cross-impact Keywords: {cross_impact_keywords}")
-        # Fetch Finnhub direct company-news
-        for symbol in symbol_watchlist:
+        tickers_to_query = list(symbol_watchlist)
+        if extra_tickers:
+            tickers_to_query.extend([t for t in extra_tickers if t not in tickers_to_query])
+            
+        print(f"Live Ingestion Active. Watchlist Tickers: {symbol_watchlist}. Extra Tickers: {extra_tickers}. Cross-impact Keywords: {cross_impact_keywords}")
+        # Fetch Finnhub direct company-news for all target tickers
+        for symbol in tickers_to_query:
             all_articles.extend(fetch_finnhub_direct_news(symbol))
         
         # Fetch Currents cross-impact news
